@@ -1,5 +1,6 @@
 package com.darkcollective.relix.mcp;
 
+import com.darkcollective.relix.embed.ReferencePage;
 import com.darkcollective.relix.mcp.run.QueryResult;
 import com.darkcollective.relix.mcp.run.RunReport;
 import com.darkcollective.relix.mcp.run.ScriptRunner;
@@ -63,6 +64,9 @@ final class Tools {
             SEMI, ANTI keep rows with, or without, a match; UNION, EXCEPT, INTERSECT.
             Predicates: = != < <= > >=, AND, OR, NOT, x IN {1, 2}, x LIKE 'A%', x IS NULL. \
             Sets take braces, not parentheses. <> is not an operator. Comments are -- to end of line.
+            Relix also has operators SQL lacks: graph reachability and paths, pairwise test \
+            coverage, sessions, time-series downsampling, as-of joins, recursion and more. \
+            Before writing code in another language, describe the task to 'learn'.
             """;
 
     private static final String VALIDATE_DESCRIPTION = """
@@ -94,11 +98,7 @@ final class Tools {
             ScriptRunner.DEFAULT_SANDBOX.maxOutputRows().orElseThrow(),
             ScriptRunner.DEFAULT_SANDBOX.timeout().orElseThrow().toSeconds());
 
-    private static final String LEARN_DESCRIPTION = """
-            Reads the Relix language reference that ships with the engine. With no topic, \
-            lists every page. With a topic (an operator glyph like σ, a keyword like \
-            SELECT or ROLLING, a function name like Round, or a page path) returns that \
-            page, with its syntax and worked examples.""";
+
 
     private final ScriptValidator validator = new ScriptValidator();
     private final ScriptRunner runner = new ScriptRunner();
@@ -155,6 +155,31 @@ final class Tools {
         return new SyncToolSpecification(tool, (exchange, request) -> run(request));
     }
 
+    /**
+     * The description of {@code learn}, naming the operators SQL has no word for.
+     *
+     * <p>A model that does not know an operator exists will not ask for it; it writes
+     * the algorithm in another language instead. So the description says what exists,
+     * from the reference's own {@code advanced} pages, their titles and summaries as the
+     * engine ships them: the list cannot fall behind the jar the server runs.
+     */
+    String learnDescription() {
+        StringBuilder out = new StringBuilder("""
+                Reads the Relix language reference that ships with the engine. Ask for a \
+                page by name (an operator glyph like σ, a keyword like SELECT or ROLLING, a \
+                function like Round, or a page path), or describe what you want to do, in \
+                your own words, and learn searches every page for it. With no topic, lists \
+                every page.
+
+                Relix has operators SQL lacks. Before writing code in another language for \
+                something a query does not obviously express, search here. Among them:
+                """);
+        for (ReferencePage page : reference.category("advanced")) {
+            out.append("- ").append(page.title()).append(": ").append(page.summary()).append('\n');
+        }
+        return out.toString().stripTrailing();
+    }
+
     SyncToolSpecification learnTool() {
         Map<String, Object> schema = Map.of(
                 "type", "object",
@@ -163,7 +188,7 @@ final class Tools {
                                 + "path; omit to list every page")));
         Tool tool = Tool.builder("learn", schema)
                 .title("Read the Relix reference")
-                .description(LEARN_DESCRIPTION)
+                .description(learnDescription())
                 .annotations(readOnly("Read the Relix reference"))
                 .build();
         return new SyncToolSpecification(tool, (exchange, request) -> learn(request));
@@ -228,14 +253,24 @@ final class Tools {
         }
         String asked = topic.toString();
         return reference.page(asked).map(Tools::text).orElseGet(() -> {
-            List<String> near = reference.near(asked);
-            StringBuilder answer = new StringBuilder("No reference page is called '")
-                    .append(asked).append("'.");
-            if (!near.isEmpty()) {
-                answer.append(" Pages that mention it: ").append(String.join(", ", near))
-                        .append('.');
+            List<Reference.Hit> hits = reference.search(asked);
+            StringBuilder answer = new StringBuilder("No page is called '").append(asked)
+                    .append("'.");
+            if (hits.isEmpty()) {
+                answer.append(" No page mentions it either.");
+            } else {
+                answer.append(" These pages mention it, most relevant first; ask learn for ")
+                        .append("one by the name in brackets:\n");
+                for (Reference.Hit hit : hits) {
+                    answer.append("\n- ").append(hit.title()).append(" [").append(hit.where())
+                            .append("]: ").append(hit.summary());
+                    if (!hit.excerpt().isEmpty()) {
+                        answer.append("\n  > ").append(hit.excerpt());
+                    }
+                }
+                answer.append('\n');
             }
-            reference.spellingsPage().ifPresent(path -> answer.append(" For an ASCII ")
+            reference.spellingsPage().ifPresent(path -> answer.append("\nFor an ASCII ")
                     .append("keyword, '").append(path).append("' gives its glyph, and the ")
                     .append("glyph finds the page."));
             answer.append(" Call learn with no topic to list every page.");
