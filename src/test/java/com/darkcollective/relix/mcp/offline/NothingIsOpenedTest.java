@@ -1,4 +1,4 @@
-package com.darkcollective.relix.mcp.validate;
+package com.darkcollective.relix.mcp.offline;
 
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
@@ -31,6 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class NothingIsOpenedTest {
 
     private final ScriptValidator validator = new ScriptValidator();
+    private final ScriptExplainer explainer = new ScriptExplainer();
 
     private final AtomicInteger connects = new AtomicInteger();
     private final AtomicInteger requests = new AtomicInteger();
@@ -73,8 +74,11 @@ class NothingIsOpenedTest {
                 Map.of("customers", Map.of("name", "STRING"))));
 
         ValidationReport report = validator.validate(script, Map.of(), catalog);
+        ExplainReport explained =
+                explainer.explain(script.replace("query { wh.unknown };\n", ""), Map.of(), catalog);
 
         assertThat(report.render()).contains("unknown");
+        assertThat(explained.queries()).hasSize(2).allSatisfy(q -> assertThat(q.planned()).isTrue());
         assertThat(connects).hasValue(0);
     }
 
@@ -90,7 +94,10 @@ class NothingIsOpenedTest {
                 """.formatted(base);
 
         validator.validate(script, Map.of(), CallerCatalog.empty());
+        ExplainReport explained = explainer.explain(script, Map.of(), CallerCatalog.of(Map.of(
+                "remote", Map.of("data", Map.of("id", "NUMBER")))));
 
+        assertThat(explained.render()).as(explained.render()).contains("Plan:");
         assertThat(requests).hasValue(0);
     }
 

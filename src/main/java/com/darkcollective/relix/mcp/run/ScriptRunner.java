@@ -6,10 +6,8 @@ import com.darkcollective.relix.embed.Relix;
 import com.darkcollective.relix.embed.RelixException;
 import com.darkcollective.relix.embed.Rows;
 import com.darkcollective.relix.embed.Sandbox;
-import com.darkcollective.relix.lang.ast.NamedQueryTarget;
-import com.darkcollective.relix.lang.ast.QueryStatement;
-import com.darkcollective.relix.lang.ast.Statement;
-import com.darkcollective.relix.mcp.validate.Finding;
+import com.darkcollective.relix.mcp.offline.Finding;
+import com.darkcollective.relix.mcp.offline.QueryNames;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -85,7 +83,7 @@ public final class ScriptRunner {
                 return RunReport.invalid(findings);
             }
             List<Relation> queries = relix.script(script);
-            List<String> names = queryNames(script);
+            List<String> names = QueryNames.of(script);
             List<QueryResult> results = new ArrayList<>();
             for (int i = 0; i < queries.size(); i++) {
                 String name = i < names.size() ? names.get(i) : null;
@@ -102,19 +100,5 @@ public final class ScriptRunner {
         } catch (RelixException e) {
             return RunReport.invalid(List.of(new Finding(Finding.ERROR, e.getMessage(), null, 0, 0)));
         }
-    }
-
-    /**
-     * The view each {@code query} statement names, or null for one written as an
-     * expression, in source order: the order {@link Relix#script} returns relations in.
-     */
-    private static List<String> queryNames(String script) {
-        List<String> names = new ArrayList<>();
-        for (Statement statement : Relix.parse(script).statements()) {
-            if (statement instanceof QueryStatement query) {
-                names.add(query.target() instanceof NamedQueryTarget named ? named.name() : null);
-            }
-        }
-        return names;
     }
 }
