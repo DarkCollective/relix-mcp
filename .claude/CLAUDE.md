@@ -1,7 +1,7 @@
 # relix-mcp — Project Context for Claude
 
-An MCP server through which a language model validates Relix scripts, and reads the
-language reference. The Relix engine is **not** here: it is
+An MCP server through which a language model validates Relix scripts, runs them over
+their own inline data, and reads the language reference. The Relix engine is **not** here: it is
 `com.darkcollective.relix:relix` from Maven Central, released from
 [relix-core](https://github.com/DarkCollective/relix-core).
 
@@ -19,6 +19,9 @@ language reference. The Relix engine is **not** here: it is
 - **Validation opens nothing.** `NothingIsOpenedTest` counts connections, requests and
   file reads. Every session built for validation passes a catalog, so live
   introspection is never constructed.
+- **`run` executes only inside a closed sandbox with no declarations.** It accepts inline
+  tables, views, functions and generators, and refuses every file, database, HTTP source,
+  connection and import. Never widen it with an open session.
 - **Every primer example validates** (`ToolsTest`). A wrong example in text meant for
   a model to imitate is copied into every script written from it.
 

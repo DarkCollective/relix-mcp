@@ -73,7 +73,10 @@ public final class ScriptValidator {
                 .scriptLoader(imports)
                 .build()) {
             for (Diagnostic diagnostic : relix.validate(script)) {
-                findings.add(finding(diagnostic, imports));
+                // A location in a file the caller sent names that file; anything else is the
+                // script itself, however the engine chose to label it.
+                findings.add(Finding.of(diagnostic,
+                        path -> imports.files().containsKey(ScriptFiles.normalise(path))));
             }
         } catch (RelixException e) {
             // validate reports rather than throws; this is the backstop for a failure it
@@ -107,18 +110,6 @@ public final class ScriptValidator {
             }
         });
         return errors;
-    }
-
-    private static Finding finding(Diagnostic diagnostic, ScriptFiles imports) {
-        String severity = diagnostic.isError() ? Finding.ERROR : Finding.WARNING;
-        return diagnostic.location()
-                .map(at -> new Finding(severity, diagnostic.message(),
-                        // A location in a file the caller sent names that file; anything else
-                        // is the script itself, however the engine chose to label it.
-                        imports.files().containsKey(ScriptFiles.normalise(at.filePath()))
-                                ? at.filePath() : null,
-                        at.line(), at.column()))
-                .orElseGet(() -> new Finding(severity, diagnostic.message(), null, 0, 0));
     }
 
     /**

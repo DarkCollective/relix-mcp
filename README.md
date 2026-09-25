@@ -12,6 +12,7 @@ validate again.
 | Tool | What it does |
 |---|---|
 | `validate(script, files?, catalog?)` | Checks syntax, every relation and column name, types, and each operator's rules. Nothing the script names is opened: not its files, not its databases, not its HTTP endpoints. |
+| `run(script)` | Runs a script whose data is its own (inline tables, views, generators) and returns each query's rows. A model can show real results instead of predicted ones. Files, databases, HTTP sources, connections and imports are refused. |
 | `learn(topic?)` | The language reference that ships inside the engine: the page for an operator (`σ`, `select`), a statement, or a function (`Round`). With no topic, a list of every page. |
 
 ### What `validate` needs from the caller
@@ -36,6 +37,14 @@ looking, the caller says:
   `DURATION`, `ANY`.
 - **Imported files are sent in `files`**, keyed by the path the `import` statement
   writes: `{ "lib/common.relix": "…" }`.
+
+### What `run` allows
+
+`run` executes in a closed `Sandbox` that permits no external declarations. A sandbox
+always accepts what reads nothing outside the session, so a script can compute over the
+data it writes out and can reach nothing else. The sandbox's limits bound each call: at
+most 200 rows per query (a longer result is cut, and says so), 10 seconds per query, and
+caps on buffered rows, recursion rounds and rows passed between operators.
 
 ## Running it
 
@@ -80,6 +89,9 @@ The parts worth reading as examples:
   a `CatalogProvider` built from a description rather than a database.
 - [`ScriptFiles`](src/main/java/com/darkcollective/relix/mcp/validate/ScriptFiles.java):
   a `ScriptLoader` that serves imports from memory.
+- [`ScriptRunner`](src/main/java/com/darkcollective/relix/mcp/run/ScriptRunner.java):
+  running untrusted text safely with `Sandbox.builder()`, and reading the rows back
+  through `Relation.run()`.
 - [`Reference`](src/main/java/com/darkcollective/relix/mcp/Reference.java): the
   reference pages from `Relix.referencePages()`, and function pages from each
   `FunctionLibrary` found through `ServiceLoader`.

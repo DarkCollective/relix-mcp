@@ -30,9 +30,9 @@ class ToolsTest {
     }
 
     @Test
-    void theToolsAreValidateAndLearn() {
+    void theToolsAreValidateRunAndLearn() {
         assertThat(tools.all()).extracting(t -> t.tool().name())
-                .containsExactly("validate", "learn");
+                .containsExactly("validate", "run", "learn");
         assertThat(tools.all()).allSatisfy(t ->
                 assertThat(t.tool().annotations().readOnlyHint()).isTrue());
     }
@@ -64,6 +64,26 @@ class ToolsTest {
         args.put("catalog", Map.of("wh", Map.of("orders", Map.of("id", "NUMBER"))));
 
         assertThat(text(tools.validate(call("validate", args)))).isEqualTo("Valid.");
+    }
+
+    @Test
+    void runReturnsTheRowsInTextAndAsData() {
+        CallToolResult result = tools.run(call("run", Map.of("script", examples(Tools.PRIMER).getFirst())));
+
+        assertThat(text(result)).startsWith("Query 1:").contains("| 1 | 120 |").contains("(1 row)");
+        Map<?, ?> data = (Map<?, ?>) result.structuredContent();
+        assertThat(data.get("valid")).isEqualTo(true);
+        assertThat((List<?>) data.get("results")).singleElement().satisfies(r -> assertThat(
+                ((Map<?, ?>) r).keySet().stream().map(String::valueOf))
+                .containsExactly("name", "columns", "rows", "truncated", "failure"));
+    }
+
+    @Test
+    void runRefusesExternalDataAndAMissingScript() {
+        assertThat(text(tools.run(call("run", Map.of("script",
+                "source C from csv(\"c.csv\") { header: true, schema: { id: NUMBER } };\nquery { C };")))))
+                .contains("does not permit");
+        assertThat(tools.run(call("run", Map.of())).isError()).isTrue();
     }
 
     @Test
