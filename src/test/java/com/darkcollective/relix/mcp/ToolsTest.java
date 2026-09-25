@@ -30,6 +30,45 @@ class ToolsTest {
     }
 
     @Test
+    void everyJoinThePrimerNamesValidatesAsWrittenThere() {
+        String tables = """
+                A := [
+                | id | tag |
+                |----|-----|
+                | 1  | x   |
+                ];
+                B := [
+                | a_id | tag |
+                |------|-----|
+                | 1    | x   |
+                ];
+                Customers := [
+                | id | name |
+                |----|------|
+                | 1  | Ann  |
+                ];
+                Orders := [
+                | order_id | customer_id |
+                |----------|-------------|
+                | 1        | 1           |
+                ];
+                """;
+        String conditional = "Customers ANTI Customers.id = Orders.customer_id Orders";
+        List<String> forms = new ArrayList<>(List.of("A JOIN B", "A >< A.id = B.a_id B", conditional));
+        assertThat(Tools.PRIMER).contains(forms);
+        // The primer says the outer and semi joins take their condition as ANTI does.
+        for (String keyword : List.of("LJOIN", "RJOIN", "FJOIN", "SEMI")) {
+            assertThat(Tools.PRIMER).contains(keyword);
+            forms.add(conditional.replace(" ANTI ", " " + keyword + " "));
+        }
+
+        for (String form : forms) {
+            assertThat(new ScriptValidator().validate(tables + "query { " + form + " };",
+                    Map.of(), CallerCatalog.empty()).render()).as(form).isEqualTo("Valid.");
+        }
+    }
+
+    @Test
     void theToolsAreValidateRunAndLearn() {
         assertThat(tools.all()).extracting(t -> t.tool().name())
                 .containsExactly("validate", "run", "learn");
