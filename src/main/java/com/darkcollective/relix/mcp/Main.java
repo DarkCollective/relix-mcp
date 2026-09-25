@@ -19,8 +19,9 @@ public final class Main {
     static final String INSTRUCTIONS = """
             Checks scripts in Relix, a relational-algebra query language, against engine \
             %s. Before showing a Relix script to anyone, pass it to 'validate' and fix what \
-            it reports; use 'learn' for the reference page of an operator, function or \
-            keyword you are unsure of.""".formatted(Relix.version());
+            it reports. To show what a script returns, 'run' it over inline tables rather \
+            than predicting the rows. Use 'learn' for the reference page of an operator, \
+            function or keyword you are unsure of.""".formatted(Relix.version());
 
     private Main() {
     }
