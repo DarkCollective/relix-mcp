@@ -1,0 +1,27 @@
+# The gate: `./gradlew build` on every pull request and every push to main.
+#
+# This repository is public, so GitHub-hosted runners cost no Actions minutes and
+# nothing here needs the CodeBuild runners the private Relix repository uses.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: Gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: corretto
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew build
