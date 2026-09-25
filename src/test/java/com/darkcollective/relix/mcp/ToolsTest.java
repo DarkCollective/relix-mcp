@@ -152,13 +152,46 @@ class ToolsTest {
     }
 
     @Test
-    void learnSuggestsPagesForATopicWithNoPageOfItsOwn() {
-        assertThat(text(tools.learn(call("learn", Map.of("topic", "join")))))
-                .satisfiesAnyOf(
-                        t -> assertThat(t).contains("# "),
-                        t -> assertThat(t).contains("Pages that mention it"));
+    void learnFindsAnOperatorByWhatItDoes() {
+        assertThat(firstHit("pairwise test combinations")).isEqualTo("Cover");
+        assertThat(firstHit("group events into sessions by inactivity gap")).isEqualTo("Sessionize");
+        assertThat(firstHit("latest price as of each trade")).isEqualTo("AS-OF join");
+        assertThat(firstHit("shortest path between cities")).isEqualTo("Path");
+    }
+
+    @Test
+    void aSearchWordMatchesTheStartOfAWordOnly() {
+        // "anti" is inside "quantifier"; that must not outrank the anti join.
+        assertThat(firstHit("ANTI")).isEqualTo("Anti join");
+    }
+
+    @Test
+    void aSearchShowsTheSummaryAndTheLineThatMatched() {
+        String answer = text(tools.learn(call("learn", Map.of("topic", "pairwise test combinations"))));
+
+        assertThat(answer).contains("- Cover [advanced/cover.md]: Combinatorial")
+                .contains("  > ").contains("pairwise");
+    }
+
+    @Test
+    void aTopicNoPageMentionsSaysSo() {
         assertThat(text(tools.learn(call("learn", Map.of("topic", "zzzzqqq")))))
-                .contains("No reference page").contains("no topic");
+                .contains("No page mentions it").contains("no topic");
+    }
+
+    @Test
+    void learnsDescriptionNamesTheOperatorsSqlLacks() {
+        String description = tools.learnTool().tool().description();
+
+        assertThat(description).contains("- Cover: Combinatorial")
+                .contains("- Sessionize:").contains("- Closure:");
+    }
+
+    private String firstHit(String request) {
+        return text(tools.learn(call("learn", Map.of("topic", request)))).lines()
+                .filter(l -> l.startsWith("- ")).findFirst()
+                .map(l -> l.substring(2, l.indexOf(" [")))
+                .orElse("(none)");
     }
 
     /** The indented blocks of the primer, each one a script on its own. */
