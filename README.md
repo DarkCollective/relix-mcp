@@ -12,10 +12,11 @@ validate again.
 | Tool | What it does |
 |---|---|
 | `validate(script, files?, catalog?)` | Checks syntax, every relation and column name, types, and each operator's rules. Nothing the script names is opened: not its files, not its databases, not its HTTP endpoints. |
+| `explain(script, files?, catalog?)` | Shows how the engine would run a script: each rewrite the optimiser applies, the rewritten query, and the physical plan. For a database connection, that includes the exact SQL that would be sent, in the connection's dialect. Like `validate`, it contacts nothing. |
 | `run(script)` | Runs a script whose data is its own (inline tables, views, generators) and returns each query's rows. A model can show real results instead of predicted ones. Files, databases, HTTP sources, connections and imports are refused. |
 | `learn(topic?)` | The language reference that ships inside the engine: the page for an operator (`σ`, `select`), a statement, or a function (`Round`). With no topic, a list of every page. |
 
-### What `validate` needs from the caller
+### What `validate` and `explain` need from the caller
 
 It never reaches anything a script names, so what the engine would otherwise learn by
 looking, the caller says:
@@ -81,13 +82,17 @@ engine package the compiled classes use, and each must be exported.
 
 The parts worth reading as examples:
 
-- [`ScriptValidator`](src/main/java/com/darkcollective/relix/mcp/validate/ScriptValidator.java):
-  a `Relix` session that analyses a script without reaching anything it names. It uses
-  a caller-supplied `catalog`, `remoteFiles(false)` and an in-memory `scriptLoader`,
-  and then calls `validate`.
-- [`CallerCatalog`](src/main/java/com/darkcollective/relix/mcp/validate/CallerCatalog.java):
+- [`OfflineSession`](src/main/java/com/darkcollective/relix/mcp/offline/OfflineSession.java):
+  a `Relix` session that analyses and plans a script without reaching anything it names:
+  a caller-supplied `catalog`, `remoteFiles(false)` and an in-memory `scriptLoader`.
+- [`ScriptValidator`](src/main/java/com/darkcollective/relix/mcp/offline/ScriptValidator.java):
+  `Relix.validate`, with its diagnostics turned into placed findings.
+- [`ScriptExplainer`](src/main/java/com/darkcollective/relix/mcp/offline/ScriptExplainer.java):
+  `render()`, `optimized()`, `rewrites()` and `explain()`, the inspection terminals, none
+  of which reads a row.
+- [`CallerCatalog`](src/main/java/com/darkcollective/relix/mcp/offline/CallerCatalog.java):
   a `CatalogProvider` built from a description rather than a database.
-- [`ScriptFiles`](src/main/java/com/darkcollective/relix/mcp/validate/ScriptFiles.java):
+- [`ScriptFiles`](src/main/java/com/darkcollective/relix/mcp/offline/ScriptFiles.java):
   a `ScriptLoader` that serves imports from memory.
 - [`ScriptRunner`](src/main/java/com/darkcollective/relix/mcp/run/ScriptRunner.java):
   running untrusted text safely with `Sandbox.builder()`, and reading the rows back

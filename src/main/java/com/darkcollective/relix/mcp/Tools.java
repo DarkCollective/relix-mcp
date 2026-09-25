@@ -4,10 +4,13 @@ import com.darkcollective.relix.embed.ReferencePage;
 import com.darkcollective.relix.mcp.run.QueryResult;
 import com.darkcollective.relix.mcp.run.RunReport;
 import com.darkcollective.relix.mcp.run.ScriptRunner;
-import com.darkcollective.relix.mcp.validate.CallerCatalog;
-import com.darkcollective.relix.mcp.validate.Finding;
-import com.darkcollective.relix.mcp.validate.ScriptValidator;
-import com.darkcollective.relix.mcp.validate.ValidationReport;
+import com.darkcollective.relix.mcp.offline.CallerCatalog;
+import com.darkcollective.relix.mcp.offline.ExplainReport;
+import com.darkcollective.relix.mcp.offline.QueryPlan;
+import com.darkcollective.relix.mcp.offline.ScriptExplainer;
+import com.darkcollective.relix.mcp.offline.Finding;
+import com.darkcollective.relix.mcp.offline.ScriptValidator;
+import com.darkcollective.relix.mcp.offline.ValidationReport;
 import com.darkcollective.relix.symbol.ScalarType;
 import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
@@ -22,7 +25,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * The server's tools: {@code validate}, {@code run} and {@code learn}.
+ * The server's tools: {@code validate}, {@code explain}, {@code run} and {@code learn}.
  *
  * <p>Each is a plain function from arguments to a result, so it is the same whichever
  * transport carries it, and a test calls it without one.
@@ -81,10 +84,23 @@ final class Tools {
             'catalog' as {"conn": {"table": {"column": "TYPE"}}}; a table not described \
             there is reported as unknown. Send the text of each imported file in 'files'.
 
-            To see what a script returns, use 'run' with its data as inline tables. Use \
+            To see the SQL a script would send to a database, use 'explain'. To see what \
+            a script returns, use 'run' with its data as inline tables. Use \
             'learn' for the reference page of any operator, function or keyword.
 
             """ + PRIMER;
+
+    private static final String EXPLAIN_DESCRIPTION = """
+            Shows how the engine would run a Relix script, without running it: for each \
+            query, the query as written, each rewrite the optimiser applies (views \
+            inlined, selections pushed down, ...), the rewritten query, and the physical \
+            plan with its join algorithms and estimated row counts.
+
+            For a database connection, the plan shows what is pushed to the database and \
+            the exact SQL it would be sent, in the dialect the connection's URL names \
+            (jdbc:postgresql:, jdbc:mysql:, ...). Nothing is contacted, so describe the \
+            tables in 'catalog' as for 'validate'. The script is validated first, and an \
+            invalid one returns its errors.""";
 
     private static final String RUN_DESCRIPTION = """
             Runs a Relix script and returns the rows each query statement produces, as a \
@@ -103,25 +119,29 @@ final class Tools {
 
     private final ScriptValidator validator = new ScriptValidator();
     private final ScriptRunner runner = new ScriptRunner();
+    private final ScriptExplainer explainer = new ScriptExplainer();
     private final Reference reference = new Reference();
 
     /**
      * {@return every tool the server offers}
      */
     List<SyncToolSpecification> all() {
-        return List.of(validateTool(), runTool(), learnTool());
+        return List.of(validateTool(), explainTool(), runTool(), learnTool());
     }
 
-    SyncToolSpecification validateTool() {
+    /**
+     * The arguments both offline tools take: the script, the files it imports, and the
+     * tables of its connections.
+     */
+    private static Map<String, Object> offlineSchema(String scriptDescription) {
         String types = Arrays.stream(ScalarType.values()).map(Enum::name)
                 .collect(Collectors.joining("\", \""));
         Map<String, Object> column = Map.of("type", "string",
                 "description", "a column type: \"" + types + "\"");
-        Map<String, Object> schema = Map.of(
+        return Map.of(
                 "type", "object",
                 "properties", Map.of(
-                        "script", Map.of("type", "string",
-                                "description", "the Relix script to check"),
+                        "script", Map.of("type", "string", "description", scriptDescription),
                         "files", Map.of("type", "object",
                                 "description", "the text of each file the script imports, "
                                         + "keyed by the path its import statement writes",
@@ -134,12 +154,24 @@ final class Tools {
                                         "additionalProperties", Map.of("type", "object",
                                                 "additionalProperties", column)))),
                 "required", List.of("script"));
-        Tool tool = Tool.builder("validate", schema)
+    }
+
+    SyncToolSpecification validateTool() {
+        Tool tool = Tool.builder("validate", offlineSchema("the Relix script to check"))
                 .title("Validate a Relix script")
                 .description(VALIDATE_DESCRIPTION)
                 .annotations(readOnly("Validate a Relix script"))
                 .build();
         return new SyncToolSpecification(tool, (exchange, request) -> validate(request));
+    }
+
+    SyncToolSpecification explainTool() {
+        Tool tool = Tool.builder("explain", offlineSchema("the Relix script to explain"))
+                .title("Explain how a Relix script would run")
+                .description(EXPLAIN_DESCRIPTION)
+                .annotations(readOnly("Explain how a Relix script would run"))
+                .build();
+        return new SyncToolSpecification(tool, (exchange, request) -> explain(request));
     }
 
     SyncToolSpecification runTool() {
@@ -195,10 +227,19 @@ final class Tools {
         return new SyncToolSpecification(tool, (exchange, request) -> learn(request));
     }
 
-    CallToolResult validate(CallToolRequest request) {
+    /** What an offline tool was asked to look at, once its arguments have been read. */
+    private record OfflineRequest(String script, Map<String, String> files, CallerCatalog catalog) {
+    }
+
+    /**
+     * Reads an offline tool's arguments.
+     *
+     * @return the request, or a tool error saying which argument is wrong and how
+     */
+    private static Object offlineRequest(CallToolRequest request, String verb) {
         Map<String, Object> args = request.arguments() == null ? Map.of() : request.arguments();
         if (!(args.get("script") instanceof String script)) {
-            return failure("'script' is required: the text of the Relix script to check.");
+            return failure("'script' is required: the text of the Relix script to " + verb + ".");
         }
         Map<String, String> files = new LinkedHashMap<>();
         if (args.get("files") instanceof Map<?, ?> sent) {
@@ -212,22 +253,45 @@ final class Tools {
         } else if (args.get("files") != null) {
             return failure("'files' must be an object mapping each imported path to its text.");
         }
-        CallerCatalog catalog;
         try {
-            catalog = switch (args.get("catalog")) {
+            CallerCatalog catalog = switch (args.get("catalog")) {
                 case null -> CallerCatalog.empty();
                 case Map<?, ?> described -> CallerCatalog.of(stringKeys(described));
                 default -> throw new IllegalArgumentException(
                         "catalog: must be an object, {\"conn\": {\"table\": {\"column\": \"TYPE\"}}}");
             };
+            return new OfflineRequest(script, files, catalog);
         } catch (IllegalArgumentException e) {
             return failure(e.getMessage());
         }
-        ValidationReport report = validator.validate(script, files, catalog);
+    }
+
+    CallToolResult validate(CallToolRequest request) {
+        Object parsed = offlineRequest(request, "check");
+        if (!(parsed instanceof OfflineRequest asked)) {
+            return (CallToolResult) parsed;
+        }
+        ValidationReport report = validator.validate(asked.script(), asked.files(), asked.catalog());
         return CallToolResult.builder()
                 .addTextContent(report.render())
                 .structuredContent(Map.of("valid", report.valid(), "findings",
                         report.findings().stream().map(Tools::asData).toList()))
+                .build();
+    }
+
+    CallToolResult explain(CallToolRequest request) {
+        Object parsed = offlineRequest(request, "explain");
+        if (!(parsed instanceof OfflineRequest asked)) {
+            return (CallToolResult) parsed;
+        }
+        ExplainReport report = explainer.explain(asked.script(), asked.files(), asked.catalog());
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("valid", report.valid());
+        data.put("findings", report.findings().stream().map(Tools::asData).toList());
+        data.put("queries", report.queries().stream().map(Tools::asData).toList());
+        return CallToolResult.builder()
+                .addTextContent(report.render())
+                .structuredContent(data)
                 .build();
     }
 
@@ -287,6 +351,18 @@ final class Tools {
         data.put("file", finding.file());
         data.put("line", finding.line());
         data.put("column", finding.column());
+        return data;
+    }
+
+    /** A query's plan as the JSON object a client receives. */
+    private static Map<String, Object> asData(QueryPlan plan) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("name", plan.name());
+        data.put("written", plan.written());
+        data.put("rewrites", plan.rewrites());
+        data.put("optimised", plan.optimised());
+        data.put("plan", plan.plan());
+        data.put("failure", plan.failure());
         return data;
     }
 

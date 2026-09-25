@@ -1,7 +1,7 @@
 package com.darkcollective.relix.mcp;
 
-import com.darkcollective.relix.mcp.validate.CallerCatalog;
-import com.darkcollective.relix.mcp.validate.ScriptValidator;
+import com.darkcollective.relix.mcp.offline.CallerCatalog;
+import com.darkcollective.relix.mcp.offline.ScriptValidator;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import io.modelcontextprotocol.spec.McpSchema.TextContent;
@@ -69,9 +69,9 @@ class ToolsTest {
     }
 
     @Test
-    void theToolsAreValidateRunAndLearn() {
+    void theToolsAreValidateExplainRunAndLearn() {
         assertThat(tools.all()).extracting(t -> t.tool().name())
-                .containsExactly("validate", "run", "learn");
+                .containsExactly("validate", "explain", "run", "learn");
         assertThat(tools.all()).allSatisfy(t ->
                 assertThat(t.tool().annotations().readOnlyHint()).isTrue());
     }
@@ -123,6 +123,32 @@ class ToolsTest {
                 "source C from csv(\"c.csv\") { header: true, schema: { id: NUMBER } };\nquery { C };")))))
                 .contains("does not permit");
         assertThat(tools.run(call("run", Map.of())).isError()).isTrue();
+    }
+
+    @Test
+    void explainShowsTheSqlForTheCallersDatabaseInTextAndAsData() {
+        Map<String, Object> args = new HashMap<>();
+        args.put("script", """
+                connection wh from jdbc { url: "jdbc:postgresql://db.invalid/wh" };
+                query { SELECT amount > 100 (wh.orders) };
+                """);
+        args.put("catalog", Map.of("wh", Map.of("orders", Map.of("amount", "NUMBER"))));
+
+        CallToolResult result = tools.explain(call("explain", args));
+
+        assertThat(text(result)).contains("Plan:").contains("PushedScan").contains("WHERE");
+        Map<?, ?> data = (Map<?, ?>) result.structuredContent();
+        assertThat((List<?>) data.get("queries")).singleElement().satisfies(q -> assertThat(
+                ((Map<?, ?>) q).keySet().stream().map(String::valueOf))
+                .containsExactly("name", "written", "rewrites", "optimised", "plan", "failure"));
+    }
+
+    @Test
+    void explainReadsItsArgumentsAsValidateDoes() {
+        assertThat(tools.explain(call("explain", Map.of())).isError()).isTrue();
+        assertThat(text(tools.explain(call("explain", Map.of())))).contains("to explain");
+        assertThat(tools.explain(call("explain", Map.of("script", "", "catalog", "x"))).isError())
+                .isTrue();
     }
 
     @Test
