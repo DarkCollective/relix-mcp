@@ -1,0 +1,71 @@
+// relix-mcp: an MCP server through which a language model checks Relix scripts.
+//
+// It depends on the engine exactly as any program outside the Relix repositories would:
+// one released coordinate from Maven Central, reached through the packages its module
+// descriptor exports. The MCP SDK's jars carry an automatic module name the module
+// system rejects (it has a hyphen), so this builds on the class path, where every package
+// of a jar is readable; EngineBoundaryTest holds the compiled classes to the exported
+// packages instead, reading the export list from the engine jar's own descriptor.
+
+plugins {
+    id 'application'
+}
+
+group = 'com.darkcollective.relix'
+version = '0.1.0-SNAPSHOT'
+
+repositories {
+    mavenCentral()
+}
+
+java {
+    toolchain {
+        // The engine targets Java 21, the current LTS, and so does everything built on it.
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+ext.relixVersion = (findProperty('relixVersion') ?: '1.0.0-rc4') as String
+
+dependencies {
+    implementation "com.darkcollective.relix:relix:${relixVersion}"
+
+    implementation platform('io.modelcontextprotocol.sdk:mcp-bom:2.0.1')
+    implementation 'io.modelcontextprotocol.sdk:mcp'
+    // The SDK logs through SLF4J; with no provider it warns on every start. Standard
+    // output is the protocol's, so the server has nothing to say there anyway.
+    runtimeOnly 'org.slf4j:slf4j-nop:2.0.17'
+
+    testImplementation platform('org.junit:junit-bom:5.10.3')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testImplementation 'org.assertj:assertj-core:3.24.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+application {
+    mainClass = 'com.darkcollective.relix.mcp.Main'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.compilerArgs += ['-Xlint:all', '-Werror']
+}
+
+tasks.withType(Javadoc).configureEach {
+    options.encoding = 'UTF-8'
+    options.addStringOption('Xdoclint:all,-missing', '-quiet')
+}
+
+tasks.named('check') {
+    dependsOn tasks.named('javadoc')
+}
+
+test {
+    useJUnitPlatform()
+}
+
+jar {
+    manifest {
+        attributes('Implementation-Title': project.name, 'Implementation-Version': project.version)
+    }
+}
