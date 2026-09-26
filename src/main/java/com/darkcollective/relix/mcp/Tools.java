@@ -1,5 +1,8 @@
 package com.darkcollective.relix.mcp;
 
+import com.darkcollective.relix.mcp.run.QueryResult;
+import com.darkcollective.relix.mcp.run.RunReport;
+import com.darkcollective.relix.mcp.run.ScriptRunner;
 import com.darkcollective.relix.mcp.validate.CallerCatalog;
 import com.darkcollective.relix.mcp.validate.Finding;
 import com.darkcollective.relix.mcp.validate.ScriptValidator;
@@ -18,7 +21,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * The server's tools: {@code validate} and {@code learn}.
+ * The server's tools: {@code validate}, {@code run} and {@code learn}.
  *
  * <p>Each is a plain function from arguments to a result, so it is the same whichever
  * transport carries it, and a test calls it without one.
@@ -73,9 +76,23 @@ final class Tools {
             'catalog' as {"conn": {"table": {"column": "TYPE"}}}; a table not described \
             there is reported as unknown. Send the text of each imported file in 'files'.
 
-            Use 'learn' for the reference page of any operator, function or keyword.
+            To see what a script returns, use 'run' with its data as inline tables. Use \
+            'learn' for the reference page of any operator, function or keyword.
 
             """ + PRIMER;
+
+    private static final String RUN_DESCRIPTION = """
+            Runs a Relix script and returns the rows each query statement produces, as a \
+            table. Use it to show real results instead of predicting them.
+
+            The script's data must be its own: inline tables, views, and generators. Any \
+            file, database or HTTP source, connection, or import is refused, so to run a \
+            query meant for real data, write a few representative rows as an inline table. \
+            Each query returns at most %d rows (a longer result is cut, and says so) and \
+            stops after %d seconds. The script is validated first, and an invalid one \
+            returns its errors without running.""".formatted(
+            ScriptRunner.DEFAULT_SANDBOX.maxOutputRows().orElseThrow(),
+            ScriptRunner.DEFAULT_SANDBOX.timeout().orElseThrow().toSeconds());
 
     private static final String LEARN_DESCRIPTION = """
             Reads the Relix language reference that ships with the engine. With no topic, \
@@ -84,13 +101,14 @@ final class Tools {
             page, with its syntax and worked examples.""";
 
     private final ScriptValidator validator = new ScriptValidator();
+    private final ScriptRunner runner = new ScriptRunner();
     private final Reference reference = new Reference();
 
     /**
      * {@return every tool the server offers}
      */
     List<SyncToolSpecification> all() {
-        return List.of(validateTool(), learnTool());
+        return List.of(validateTool(), runTool(), learnTool());
     }
 
     SyncToolSpecification validateTool() {
@@ -121,6 +139,20 @@ final class Tools {
                 .annotations(readOnly("Validate a Relix script"))
                 .build();
         return new SyncToolSpecification(tool, (exchange, request) -> validate(request));
+    }
+
+    SyncToolSpecification runTool() {
+        Map<String, Object> schema = Map.of(
+                "type", "object",
+                "properties", Map.of("script", Map.of("type", "string",
+                        "description", "the Relix script to run; its data must be inline tables")),
+                "required", List.of("script"));
+        Tool tool = Tool.builder("run", schema)
+                .title("Run a Relix script over its own data")
+                .description(RUN_DESCRIPTION)
+                .annotations(readOnly("Run a Relix script over its own data"))
+                .build();
+        return new SyncToolSpecification(tool, (exchange, request) -> run(request));
     }
 
     SyncToolSpecification learnTool() {
@@ -173,6 +205,22 @@ final class Tools {
                 .build();
     }
 
+    CallToolResult run(CallToolRequest request) {
+        Object script = request.arguments() == null ? null : request.arguments().get("script");
+        if (!(script instanceof String text)) {
+            return failure("'script' is required: the text of the Relix script to run.");
+        }
+        RunReport report = runner.run(text);
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("valid", report.valid());
+        data.put("findings", report.findings().stream().map(Tools::asData).toList());
+        data.put("results", report.results().stream().map(Tools::asData).toList());
+        return CallToolResult.builder()
+                .addTextContent(report.render())
+                .structuredContent(data)
+                .build();
+    }
+
     CallToolResult learn(CallToolRequest request) {
         Object topic = request.arguments() == null ? null : request.arguments().get("topic");
         if (topic == null || topic.toString().isBlank()) {
@@ -203,6 +251,17 @@ final class Tools {
         data.put("file", finding.file());
         data.put("line", finding.line());
         data.put("column", finding.column());
+        return data;
+    }
+
+    /** A query's result as the JSON object a client receives. */
+    private static Map<String, Object> asData(QueryResult result) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("name", result.name());
+        data.put("columns", result.columns());
+        data.put("rows", result.rows());
+        data.put("truncated", result.truncated());
+        data.put("failure", result.failure());
         return data;
     }
 
