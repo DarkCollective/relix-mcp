@@ -30,8 +30,10 @@ public final class Main {
     /** What the server tells a client it is for, before any tool is listed. */
     static final String INSTRUCTIONS = """
             Checks scripts in Relix, a relational-algebra query language, against engine \
-            %s. Before showing a Relix script to anyone, pass it to 'validate' and fix what \
-            it reports. To show what a script returns, 'run' it over inline tables rather \
+            %s. Write a script against the tables and columns you were given, never ones \
+            you imagine. Before showing a Relix script to anyone, pass it to 'validate', fix \
+            what it reports, and validate it again after every change: a script is ready \
+            only once 'validate' says Valid. To show what a script returns, 'run' it over inline tables rather \
             than predicting the rows; to show how it would run, and the SQL it would send \
             to a database, use 'explain'. Use 'learn' for the reference page of an operator, \
             function or keyword you are unsure of, and learn '%s' for the whole grammar. \
