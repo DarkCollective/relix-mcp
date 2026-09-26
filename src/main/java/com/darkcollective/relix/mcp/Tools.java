@@ -60,8 +60,9 @@ final class Tools {
             PROJECT a, b * 2 -> c (R) π chooses columns; GROUP k, SUM(x) -> total, COUNT(*) -> n (R) γ; \
             SORT x DESC (R) τ; LIMIT n (R) λ; RENAME (old -> new) (R) ρ; DISTINCT (R) δ; \
             A JOIN B ⋈ joins on every shared column name; A >< A.id = B.a_id B joins on a \
-            condition written between the inputs; LJOIN, RJOIN, FJOIN are outer joins and \
-            SEMI, ANTI keep rows with, or without, a match; UNION, EXCEPT, INTERSECT.
+            condition written between the inputs; LJOIN, RJOIN, FJOIN (outer) and SEMI, ANTI \
+            (keep rows with, or without, a match) take a condition the same way: \
+            Customers ANTI Customers.id = Orders.customer_id Orders. UNION, EXCEPT, INTERSECT.
             Predicates: = != < <= > >=, AND, OR, NOT, x IN {1, 2}, x LIKE 'A%', x IS NULL. \
             Sets take braces, not parentheses. <> is not an operator. Comments are -- to end of line.
             Relix also has operators SQL lacks: graph reachability and paths, pairwise test \
