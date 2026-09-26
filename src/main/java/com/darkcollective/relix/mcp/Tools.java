@@ -103,6 +103,14 @@ final class Tools {
 
             """ + PRIMER;
 
+    /**
+     * What an invalid verdict ends with. A model that has called {@code validate} once tends
+     * to treat the call as the check, show its fix unchecked, and so show the same error
+     * again; saying so where the error is read is what reaches it.
+     */
+    static final String REVALIDATE = "Fix these, then call 'validate' again on the fixed "
+            + "script: it is ready to show only once this says Valid.";
+
     private static final String EXPLAIN_DESCRIPTION = """
             Shows how the engine would run a Relix script, without running it: for each \
             query, the query as written, each rewrite the optimiser applies (views \
@@ -316,7 +324,7 @@ final class Tools {
         }
         ValidationReport report = validator.validate(asked.script(), asked.files(), asked.catalog());
         return CallToolResult.builder()
-                .addTextContent(report.render())
+                .addTextContent(report.valid() ? report.render() : report.render() + "\n" + REVALIDATE)
                 .structuredContent(Map.of("valid", report.valid(), "findings",
                         report.findings().stream().map(Tools::asData).toList()))
                 .build();
