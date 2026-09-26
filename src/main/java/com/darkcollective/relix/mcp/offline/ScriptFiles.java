@@ -1,4 +1,4 @@
-package com.darkcollective.relix.mcp.validate;
+package com.darkcollective.relix.mcp.offline;
 
 import com.darkcollective.relix.embed.Relix;
 import com.darkcollective.relix.lang.ast.Script;

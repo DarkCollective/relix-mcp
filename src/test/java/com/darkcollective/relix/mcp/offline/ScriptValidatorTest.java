@@ -1,4 +1,4 @@
-package com.darkcollective.relix.mcp.validate;
+package com.darkcollective.relix.mcp.offline;
 
 import org.junit.jupiter.api.Test;
 

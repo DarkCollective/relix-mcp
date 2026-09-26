@@ -1,6 +1,6 @@
 package com.darkcollective.relix.mcp.run;
 
-import com.darkcollective.relix.mcp.validate.Finding;
+import com.darkcollective.relix.mcp.offline.Finding;
 
 import java.util.List;
 import java.util.stream.Collectors;

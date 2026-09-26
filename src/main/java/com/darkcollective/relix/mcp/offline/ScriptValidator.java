@@ -1,4 +1,4 @@
-package com.darkcollective.relix.mcp.validate;
+package com.darkcollective.relix.mcp.offline;
 
 import com.darkcollective.relix.embed.Diagnostic;
 import com.darkcollective.relix.embed.Relix;
@@ -30,23 +30,8 @@ import java.util.Optional;
  *       none, because the declaration already says.</li>
  * </ul>
  *
- * <p>Everything here is the engine's public API. The session is an ordinary
- * {@link Relix} session built with three choices, each of which closes one way analysis
- * could reach outside the process:
- *
- * <ol>
- *   <li>{@code catalog(…)} — the caller's description of its connections, which
- *       <em>replaces</em> the default catalog. The default describes a table by asking the
- *       connection, which for a {@code jdbc} URL means connecting to it.</li>
- *   <li>{@code remoteFiles(false)} — a file connection naming an {@code https} URL is an
- *       error rather than a download.</li>
- *   <li>{@code scriptLoader(…)} — an {@code import} is served from what the caller sent,
- *       never from this machine's disk.</li>
- * </ol>
- *
- * <p>And then only {@link Relix#validate(String)} is called. Analysis reads no rows, so
- * nothing past the catalog is ever asked for; the session is closed without anything
- * having been executed.
+ * <p>The session is an {@link OfflineSession}, and only {@link Relix#validate(String)} is
+ * called on it: analysis reads no rows, so nothing past the caller's catalog is asked for.
  */
 public final class ScriptValidator {
 
@@ -67,11 +52,7 @@ public final class ScriptValidator {
         if (!findings.isEmpty()) {
             return new ValidationReport(false, findings);
         }
-        try (Relix relix = Relix.builder()
-                .catalog(catalog)
-                .remoteFiles(false)
-                .scriptLoader(imports)
-                .build()) {
+        try (Relix relix = OfflineSession.open(imports, catalog)) {
             for (Diagnostic diagnostic : relix.validate(script)) {
                 // A location in a file the caller sent names that file; anything else is the
                 // script itself, however the engine chose to label it.
