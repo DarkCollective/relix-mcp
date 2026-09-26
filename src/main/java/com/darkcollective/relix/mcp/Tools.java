@@ -116,6 +116,22 @@ final class Tools {
             invalid one returns its errors.""";
 
     /**
+     * The reference page holding the whole language as EBNF. It ships in the engine jar, so
+     * {@code learn} serves the grammar of exactly the engine this server runs.
+     */
+    static final String GRAMMAR_PAGE = "language/grammar.md";
+
+    /**
+     * Where the site publishes the language's primer and grammar as plain text, for a
+     * reader who can fetch a URL. They describe the site's current release, which is the
+     * hosted server's engine but may not be a local install's, so the tools point at
+     * {@code learn} for anything a script depends on and at these for further reading.
+     */
+    static final String SITE = "https://relix.darkcollective.com";
+    static final String LLMS_TXT = SITE + "/llms.txt";
+    static final String GRAMMAR_TXT = SITE + "/reference/language/grammar.ebnf.txt";
+
+    /**
      * The query the {@code run} description offers for looking at a script's own
      * relations. {@code ToolsTest} runs it inside the sandbox, under the primer's table.
      */
@@ -226,11 +242,14 @@ final class Tools {
                 page by name (an operator glyph like σ, a keyword like SELECT or ROLLING, a \
                 function like Round, or a page path), or describe what you want to do, in \
                 your own words, and learn searches every page for it. With no topic, lists \
-                every page.
+                every page. The whole grammar, as EBNF, is the page '%s'.
+
+                For a reader that can fetch a URL, the site publishes a primer at %s and \
+                the grammar as plain text at %s; they describe the current release.
 
                 Relix has operators SQL lacks. Before writing code in another language for \
                 something a query does not obviously express, search here. Among them:
-                """);
+                """.formatted(GRAMMAR_PAGE, LLMS_TXT, GRAMMAR_TXT));
         for (ReferencePage page : reference.category("advanced")) {
             out.append("- ").append(page.title()).append(": ").append(page.summary()).append('\n');
         }
