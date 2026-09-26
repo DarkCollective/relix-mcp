@@ -82,7 +82,8 @@ class ToolsTest {
                 Map.of("script", "query { SELECT a > 1 (Nowhere) };")));
 
         assertThat(result.isError()).isNotEqualTo(Boolean.TRUE);
-        assertThat(text(result)).startsWith("Invalid: 1 error.").contains("Nowhere");
+        assertThat(text(result)).startsWith("Invalid: 1 error.").contains("Nowhere")
+                .endsWith(Tools.REVALIDATE);
         assertThat(result.structuredContent()).isInstanceOf(Map.class);
         Map<?, ?> data = (Map<?, ?>) result.structuredContent();
         assertThat(data.get("valid")).isEqualTo(false);
@@ -278,6 +279,12 @@ class ToolsTest {
                 .contains(Tools.LLMS_TXT).contains(Tools.GRAMMAR_TXT);
         assertThat(Main.INSTRUCTIONS).contains(Tools.GRAMMAR_PAGE)
                 .contains(Tools.LLMS_TXT).contains(Tools.GRAMMAR_TXT);
+    }
+
+    @Test
+    void theInstructionsAskForAFixToBeValidatedAgain() {
+        assertThat(Main.INSTRUCTIONS).contains("validate it again after every change")
+                .contains("the tables and columns you were given");
     }
 
     private String firstHit(String request) {
