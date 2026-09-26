@@ -34,7 +34,9 @@ public final class Main {
             it reports. To show what a script returns, 'run' it over inline tables rather \
             than predicting the rows; to show how it would run, and the SQL it would send \
             to a database, use 'explain'. Use 'learn' for the reference page of an operator, \
-            function or keyword you are unsure of.""".formatted(Relix.version());
+            function or keyword you are unsure of, and learn '%s' for the whole grammar. \
+            The same material is published at %s and %s.""".formatted(Relix.version(),
+            Tools.GRAMMAR_PAGE, Tools.LLMS_TXT, Tools.GRAMMAR_TXT);
 
     static final String USAGE = """
             usage: relix-mcp                 serve MCP over standard input and output

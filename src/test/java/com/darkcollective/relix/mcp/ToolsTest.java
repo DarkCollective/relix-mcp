@@ -269,6 +269,17 @@ class ToolsTest {
                 .contains("- Sessionize:").contains("- Closure:");
     }
 
+    @Test
+    void theGrammarIsAPageLearnServesAndTheSiteCopiesAreLinked() {
+        String grammar = text(tools.learn(call("learn", Map.of("topic", Tools.GRAMMAR_PAGE))));
+
+        assertThat(grammar).startsWith("# Name: Grammar").contains("::=");
+        assertThat(tools.learnTool().tool().description()).contains(Tools.GRAMMAR_PAGE)
+                .contains(Tools.LLMS_TXT).contains(Tools.GRAMMAR_TXT);
+        assertThat(Main.INSTRUCTIONS).contains(Tools.GRAMMAR_PAGE)
+                .contains(Tools.LLMS_TXT).contains(Tools.GRAMMAR_TXT);
+    }
+
     private String firstHit(String request) {
         return text(tools.learn(call("learn", Map.of("topic", request)))).lines()
                 .filter(l -> l.startsWith("- ")).findFirst()

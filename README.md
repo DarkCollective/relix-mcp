@@ -14,7 +14,7 @@ validate again.
 | `validate(script, files?, catalog?)` | Checks syntax, every relation and column name, types, and each operator's rules. Nothing the script names is opened: not its files, not its databases, not its HTTP endpoints. |
 | `explain(script, files?, catalog?)` | Shows how the engine would run a script: each rewrite the optimiser applies, the rewritten query, and the physical plan. For a database connection, that includes the exact SQL that would be sent, in the connection's dialect. Like `validate`, it contacts nothing. |
 | `run(script)` | Runs a script whose data is its own (inline tables, views, generators) and returns each query's rows. A model can show real results instead of predicted ones. Files, databases, HTTP sources, connections and imports are refused. `query { relix.columns };` shows the columns and types the engine gave the script's own tables. |
-| `learn(topic?)` | The language reference that ships inside the engine: the page for an operator (`σ`, `select`), a statement, or a function (`Round`). With no topic, a list of every page. |
+| `learn(topic?)` | The language reference that ships inside the engine: the page for an operator (`σ`, `select`), a statement, or a function (`Round`). With no topic, a list of every page. The whole grammar, as EBNF, is `learn("language/grammar.md")`. |
 
 ### What `validate` and `explain` need from the caller
 
