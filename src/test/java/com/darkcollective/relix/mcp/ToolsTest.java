@@ -126,6 +126,23 @@ class ToolsTest {
     }
 
     @Test
+    void theCatalogQueryRunsInsideTheSandboxAndDescribesTheScriptsTables() {
+        assertThat(tools.runTool().tool().description()).contains(Tools.CATALOG_QUERY);
+        String orders = examples(Tools.PRIMER).getFirst().lines()
+                .takeWhile(line -> !line.startsWith("Big"))
+                .reduce("", (script, line) -> script + line + "\n");
+
+        CallToolResult result = tools.run(call("run", Map.of("script", orders + Tools.CATALOG_QUERY)));
+
+        Map<?, ?> data = (Map<?, ?>) result.structuredContent();
+        assertThat(data.get("valid")).isEqualTo(true);
+        Map<?, ?> columns = (Map<?, ?>) ((List<?>) data.get("results")).getFirst();
+        assertThat(columns.get("failure")).isNull();
+        assertThat((List<?>) columns.get("rows")).extracting(row -> ((List<?>) row).get(0) + "." + ((List<?>) row).get(1))
+                .containsExactly("Orders.order_id", "Orders.customer_id", "Orders.amount");
+    }
+
+    @Test
     void explainShowsTheSqlForTheCallersDatabaseInTextAndAsData() {
         Map<String, Object> args = new HashMap<>();
         args.put("script", """

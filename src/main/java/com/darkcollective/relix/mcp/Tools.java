@@ -102,6 +102,12 @@ final class Tools {
             tables in 'catalog' as for 'validate'. The script is validated first, and an \
             invalid one returns its errors.""";
 
+    /**
+     * The query the {@code run} description offers for looking at a script's own
+     * relations. {@code ToolsTest} runs it inside the sandbox, under the primer's table.
+     */
+    static final String CATALOG_QUERY = "query { relix.columns };";
+
     private static final String RUN_DESCRIPTION = """
             Runs a Relix script and returns the rows each query statement produces, as a \
             table. Use it to show real results instead of predicting them.
@@ -111,9 +117,14 @@ final class Tools {
             query meant for real data, write a few representative rows as an inline table. \
             Each query returns at most %d rows (a longer result is cut, and says so) and \
             stops after %d seconds. The script is validated first, and an invalid one \
-            returns its errors without running.""".formatted(
+            returns its errors without running.
+
+            The engine describes a script's own relations, as relations: %s lists each \
+            column with the type the engine gave it, and relix.relations lists the \
+            relations with their row counts.""".formatted(
             ScriptRunner.DEFAULT_SANDBOX.maxOutputRows().orElseThrow(),
-            ScriptRunner.DEFAULT_SANDBOX.timeout().orElseThrow().toSeconds());
+            ScriptRunner.DEFAULT_SANDBOX.timeout().orElseThrow().toSeconds(),
+            CATALOG_QUERY);
 
 
 
