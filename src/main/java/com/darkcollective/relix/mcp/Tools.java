@@ -12,7 +12,6 @@ import com.darkcollective.relix.mcp.offline.Finding;
 import com.darkcollective.relix.mcp.offline.ScriptValidator;
 import com.darkcollective.relix.mcp.offline.ValidationReport;
 import com.darkcollective.relix.symbol.ScalarType;
-import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
@@ -22,6 +21,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -31,6 +31,19 @@ import java.util.stream.Collectors;
  * transport carries it, and a test calls it without one.
  */
 final class Tools {
+
+    /**
+     * A tool as the server lists it, and the function that answers a call to it.
+     *
+     * <p>The SDK has one specification type per server kind, stdio's taking the session a
+     * call arrived on and the stateless server's taking a transport context. No tool here
+     * reads either, so a tool is defined once, as this, and each server adapts it.
+     *
+     * @param tool the tool's name, schema and description
+     * @param call answers a call to it
+     */
+    record Definition(Tool tool, Function<CallToolRequest, CallToolResult> call) {
+    }
 
     /**
      * The primer a model reads before writing its first script.
@@ -136,7 +149,7 @@ final class Tools {
     /**
      * {@return every tool the server offers}
      */
-    List<SyncToolSpecification> all() {
+    List<Definition> all() {
         return List.of(validateTool(), explainTool(), runTool(), learnTool());
     }
 
@@ -167,25 +180,25 @@ final class Tools {
                 "required", List.of("script"));
     }
 
-    SyncToolSpecification validateTool() {
+    Definition validateTool() {
         Tool tool = Tool.builder("validate", offlineSchema("the Relix script to check"))
                 .title("Validate a Relix script")
                 .description(VALIDATE_DESCRIPTION)
                 .annotations(readOnly("Validate a Relix script"))
                 .build();
-        return new SyncToolSpecification(tool, (exchange, request) -> validate(request));
+        return new Definition(tool, this::validate);
     }
 
-    SyncToolSpecification explainTool() {
+    Definition explainTool() {
         Tool tool = Tool.builder("explain", offlineSchema("the Relix script to explain"))
                 .title("Explain how a Relix script would run")
                 .description(EXPLAIN_DESCRIPTION)
                 .annotations(readOnly("Explain how a Relix script would run"))
                 .build();
-        return new SyncToolSpecification(tool, (exchange, request) -> explain(request));
+        return new Definition(tool, this::explain);
     }
 
-    SyncToolSpecification runTool() {
+    Definition runTool() {
         Map<String, Object> schema = Map.of(
                 "type", "object",
                 "properties", Map.of("script", Map.of("type", "string",
@@ -196,7 +209,7 @@ final class Tools {
                 .description(RUN_DESCRIPTION)
                 .annotations(readOnly("Run a Relix script over its own data"))
                 .build();
-        return new SyncToolSpecification(tool, (exchange, request) -> run(request));
+        return new Definition(tool, this::run);
     }
 
     /**
@@ -224,7 +237,7 @@ final class Tools {
         return out.toString().stripTrailing();
     }
 
-    SyncToolSpecification learnTool() {
+    Definition learnTool() {
         Map<String, Object> schema = Map.of(
                 "type", "object",
                 "properties", Map.of("topic", Map.of("type", "string",
@@ -235,7 +248,7 @@ final class Tools {
                 .description(learnDescription())
                 .annotations(readOnly("Read the Relix reference"))
                 .build();
-        return new SyncToolSpecification(tool, (exchange, request) -> learn(request));
+        return new Definition(tool, this::learn);
     }
 
     /** What an offline tool was asked to look at, once its arguments have been read. */

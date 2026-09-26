@@ -23,6 +23,14 @@ them over their own inline data, and reads the language reference. The Relix eng
 - **`run` executes only inside a closed sandbox with no declarations.** It accepts inline
   tables, views, functions and generators, and refuses every file, database, HTTP source,
   connection and import. Never widen it with an open session.
+- **Tools are transport-neutral.** A tool is a `Tools.Definition` (a `Tool` and a
+  function from request to result); `Main` adapts it to the SDK's stdio and stateless
+  specifications. `StatelessHttpTransport` is a function from an HTTP request to a
+  response and must stay free of any HTTP server, because a serverless handler calls it
+  too.
+- **The fat jar is tested by running it.** `fatJarTest` (in `check`) starts
+  `shadowJar`'s output with `java -jar` and calls each tool; keep a call there for every
+  provider or resource the engine discovers at run time.
 - **Every primer example validates** (`ToolsTest`). A wrong example in text meant for
   a model to imitate is copied into every script written from it.
 

@@ -9,6 +9,8 @@
 
 plugins {
     id 'application'
+    // The one jar a function platform deploys: the server, the engine and the SDK together.
+    id 'com.gradleup.shadow' version '9.4.3'
 }
 
 group = 'com.darkcollective.relix'
@@ -61,7 +63,45 @@ tasks.named('check') {
 }
 
 test {
-    useJUnitPlatform()
+    useJUnitPlatform {
+        excludeTags 'fat-jar'
+    }
+}
+
+// `relix-mcp-<version>-all.jar`: everything on the runtime class path in one jar, run with
+// `java -jar`. The engine discovers its function library, connectors and reference pages
+// through ServiceLoader, so the META-INF/services files of every jar are concatenated
+// rather than the first one winning: a lost entry is a missing provider at run time and
+// nowhere earlier, which is why fatJarTest starts the jar and asks it to use each one.
+tasks.named('shadowJar') {
+    mergeServiceFiles()
+    duplicatesStrategy = DuplicatesStrategy.INCLUDE
+    // A module descriptor describes one jar; in a merged one it would describe the wrong
+    // contents. Signatures cover a jar's own entries and are void once they are merged.
+    exclude 'module-info.class', 'META-INF/versions/*/module-info.class',
+            'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA'
+    manifest {
+        attributes('Implementation-Title': project.name,
+                'Implementation-Version': project.version)
+    }
+}
+
+def fatJarTest = tasks.register('fatJarTest', Test) {
+    description = 'Starts the fat jar over HTTP and calls every tool, so a provider lost in merging fails the build.'
+    group = 'verification'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform {
+        includeTags 'fat-jar'
+    }
+    def jar = tasks.named('shadowJar').flatMap { it.archiveFile }
+    inputs.file(jar)
+    systemProperty 'relix.mcp.fatJar', jar.get().asFile.absolutePath
+    mustRunAfter tasks.named('test')
+}
+
+tasks.named('check') {
+    dependsOn fatJarTest
 }
 
 jar {
