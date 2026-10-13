@@ -12,9 +12,11 @@ import java.util.stream.Collectors;
  *                 {@code findings} says why
  * @param findings the validation errors and warnings
  * @param results  one entry per {@code query} statement, in source order; empty when the
- *                 script was invalid
+ *                 script was invalid, and only those that finished when it was stopped
+ * @param stopped  whether the caller stopped the run before every query had finished
  */
-public record RunReport(boolean valid, List<Finding> findings, List<QueryResult> results) {
+public record RunReport(boolean valid, List<Finding> findings, List<QueryResult> results,
+                        boolean stopped) {
 
     /**
      * Copies the lists.
@@ -25,11 +27,15 @@ public record RunReport(boolean valid, List<Finding> findings, List<QueryResult>
     }
 
     static RunReport invalid(List<Finding> findings) {
-        return new RunReport(false, findings, List.of());
+        return new RunReport(false, findings, List.of(), false);
     }
 
     static RunReport ran(List<Finding> findings, List<QueryResult> results) {
-        return new RunReport(true, findings, results);
+        return new RunReport(true, findings, results, false);
+    }
+
+    static RunReport stopped(List<Finding> findings, List<QueryResult> results) {
+        return new RunReport(true, findings, results, true);
     }
 
     /**
@@ -42,7 +48,7 @@ public record RunReport(boolean valid, List<Finding> findings, List<QueryResult>
             out.append("Invalid, so nothing ran:\n");
         }
         findings.forEach(f -> out.append(f.render()).append('\n'));
-        if (valid && results.isEmpty()) {
+        if (valid && !stopped && results.isEmpty()) {
             out.append("The script has no query statement, so there is nothing to show. ")
                     .append("Add one: query Name; or query { expression };\n");
         }
@@ -64,6 +70,11 @@ public record RunReport(boolean valid, List<Finding> findings, List<QueryResult>
                 out.append("; cut at the row limit, so there are more");
             }
             out.append(")\n");
+        }
+        if (stopped) {
+            out.append(results.isEmpty() && findings.isEmpty() ? "" : "\n")
+                    .append("Stopped before query ").append(results.size() + 1)
+                    .append(" finished.\n");
         }
         return out.toString().stripTrailing();
     }

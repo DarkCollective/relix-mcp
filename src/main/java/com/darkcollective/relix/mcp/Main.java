@@ -3,6 +3,7 @@ package com.darkcollective.relix.mcp;
 import com.darkcollective.relix.embed.Relix;
 import com.darkcollective.relix.mcp.http.LocalHttpServer;
 import com.darkcollective.relix.mcp.http.StatelessHttpTransport;
+import com.darkcollective.relix.mcp.run.ScriptRunner;
 import io.modelcontextprotocol.json.McpJsonDefaults;
 import io.modelcontextprotocol.server.McpServer;
 import io.modelcontextprotocol.server.McpServerFeatures;
@@ -78,7 +79,8 @@ public final class Main {
                     .capabilities(ServerCapabilities.builder().tools(false).build())
                     .tools(new Tools().all().stream().map(tool ->
                             new McpServerFeatures.SyncToolSpecification(tool.tool(),
-                                    (exchange, request) -> tool.call().apply(request))).toList())
+                                    (exchange, request) -> tool.call().apply(request,
+                                            () -> false))).toList())
                     .build();
             Runtime.getRuntime().addShutdownHook(new Thread(server::closeGracefully));
         }
@@ -107,13 +109,28 @@ public final class Main {
      * @return the server
      */
     static McpStatelessSyncServer statelessServer(StatelessHttpTransport transport) {
+        return statelessServer(transport, new ScriptRunner());
+    }
+
+    /**
+     * The tools, served statelessly over {@code transport}, {@code run} with
+     * {@code runner}'s limits. A call whose request carries a {@link Deadline} answers by
+     * it.
+     *
+     * @param transport carries the requests; the server registers itself as its handler
+     * @param runner    runs the scripts {@code run} is given
+     * @return the server
+     */
+    public static McpStatelessSyncServer statelessServer(StatelessHttpTransport transport,
+                                                         ScriptRunner runner) {
         return McpServer.sync(transport)
                 .serverInfo("relix", version())
                 .instructions(INSTRUCTIONS)
                 .capabilities(ServerCapabilities.builder().tools(false).build())
-                .tools(new Tools().all().stream().map(tool ->
+                .tools(new Tools(runner).all().stream().map(tool ->
                         new McpStatelessServerFeatures.SyncToolSpecification(tool.tool(),
-                                (context, request) -> tool.call().apply(request))).toList())
+                                (context, request) -> Deadline.call(tool, request, context)))
+                        .toList())
                 .build();
     }
 

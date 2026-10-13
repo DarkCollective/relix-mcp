@@ -39,6 +39,10 @@ dependencies {
     // The SDK logs through SLF4J; with no provider it warns on every start. Standard
     // output is the protocol's, so the server has nothing to say there anyway.
     runtimeOnly 'org.slf4j:slf4j-nop:2.0.17'
+    // The interface AWS Lambda calls a Java handler through, and nothing else of AWS: the
+    // API key is read through the Parameters and Secrets extension's local HTTP endpoint,
+    // which needs no SDK in the jar.
+    implementation 'com.amazonaws:aws-lambda-java-core:1.2.3'
 
     testImplementation platform('org.junit:junit-bom:5.10.3')
     testImplementation 'org.junit.jupiter:junit-jupiter'

@@ -21,7 +21,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Function;
+import java.util.function.BooleanSupplier;
 import java.util.stream.Collectors;
 
 /**
@@ -42,8 +42,30 @@ final class Tools {
      * @param tool the tool's name, schema and description
      * @param call answers a call to it
      */
-    record Definition(Tool tool, Function<CallToolRequest, CallToolResult> call) {
+    record Definition(Tool tool, Call call) {
     }
+
+    /**
+     * Answers a call to a tool, until told to stop.
+     *
+     * <p>A caller with a {@link Deadline} makes {@code stopped} true and interrupts the
+     * thread when it passes. A tool then returns what finished first, or a result with no
+     * content when nothing it can show did, and never the engine's account of the
+     * interrupt.
+     */
+    @FunctionalInterface
+    interface Call {
+
+        /**
+         * @param request the call
+         * @param stopped whether the call's deadline has passed
+         * @return the answer
+         */
+        CallToolResult apply(CallToolRequest request, BooleanSupplier stopped);
+    }
+
+    /** A {@code stopped} that never stops. */
+    private static final BooleanSupplier NEVER = () -> false;
 
     /**
      * The primer a model reads before writing its first script.
@@ -152,23 +174,33 @@ final class Tools {
             The script's data must be its own: inline tables, views, and generators. Any \
             file, database or HTTP source, connection, or import is refused, so to run a \
             query meant for real data, write a few representative rows as an inline table. \
-            Each query returns at most %d rows (a longer result is cut, and says so) and \
-            stops after %d seconds. The script is validated first, and an invalid one \
-            returns its errors without running.
+            Each query %s and %s. The script is validated first, and an invalid one returns its errors \
+            without running.
 
             The engine describes a script's own relations, as relations: %s lists each \
             column with the type the engine gave it, and relix.relations lists the \
-            relations with their row counts.""".formatted(
-            ScriptRunner.DEFAULT_SANDBOX.maxOutputRows().orElseThrow(),
-            ScriptRunner.DEFAULT_SANDBOX.timeout().orElseThrow().toSeconds(),
-            CATALOG_QUERY);
-
-
+            relations with their row counts.""";
 
     private final ScriptValidator validator = new ScriptValidator();
-    private final ScriptRunner runner = new ScriptRunner();
+    private final ScriptRunner runner;
     private final ScriptExplainer explainer = new ScriptExplainer();
     private final Reference reference = new Reference();
+
+    /**
+     * The tools, {@code run} with the {@linkplain ScriptRunner#DEFAULT_SANDBOX default limits}.
+     */
+    Tools() {
+        this(new ScriptRunner());
+    }
+
+    /**
+     * The tools, {@code run} with {@code runner}'s limits.
+     *
+     * @param runner runs the scripts {@code run} is given
+     */
+    Tools(ScriptRunner runner) {
+        this.runner = runner;
+    }
 
     /**
      * {@return every tool the server offers}
@@ -230,10 +262,25 @@ final class Tools {
                 "required", List.of("script"));
         Tool tool = Tool.builder("run", schema)
                 .title("Run a Relix script over its own data")
-                .description(RUN_DESCRIPTION)
+                .description(runDescription())
                 .annotations(readOnly("Run a Relix script over its own data"))
                 .build();
         return new Definition(tool, this::run);
+    }
+
+    /**
+     * The description of {@code run}, with the limits of the sandbox it runs in.
+     */
+    String runDescription() {
+        var sandbox = runner.sandbox();
+        String rows = sandbox.maxOutputRows().isPresent()
+                ? "returns at most " + sandbox.maxOutputRows().getAsInt()
+                        + " rows (a longer result is cut, and says so)"
+                : "returns every row";
+        String time = sandbox.timeout()
+                .map(t -> "stops after " + t.toSeconds() + " seconds")
+                .orElse("runs until the call's own time limit");
+        return RUN_DESCRIPTION.formatted(rows, time, CATALOG_QUERY);
     }
 
     /**
@@ -275,7 +322,7 @@ final class Tools {
                 .description(learnDescription())
                 .annotations(readOnly("Read the Relix reference"))
                 .build();
-        return new Definition(tool, this::learn);
+        return new Definition(tool, (request, stopped) -> learn(request));
     }
 
     /** What an offline tool was asked to look at, once its arguments have been read. */
@@ -318,11 +365,18 @@ final class Tools {
     }
 
     CallToolResult validate(CallToolRequest request) {
+        return validate(request, NEVER);
+    }
+
+    CallToolResult validate(CallToolRequest request, BooleanSupplier stopped) {
         Object parsed = offlineRequest(request, "check");
         if (!(parsed instanceof OfflineRequest asked)) {
             return (CallToolResult) parsed;
         }
         ValidationReport report = validator.validate(asked.script(), asked.files(), asked.catalog());
+        if (stopped.getAsBoolean()) {
+            return NOTHING_FINISHED;
+        }
         return CallToolResult.builder()
                 .addTextContent(report.valid() ? report.render() : report.render() + "\n" + REVALIDATE)
                 .structuredContent(Map.of("valid", report.valid(), "findings",
@@ -331,11 +385,18 @@ final class Tools {
     }
 
     CallToolResult explain(CallToolRequest request) {
+        return explain(request, NEVER);
+    }
+
+    CallToolResult explain(CallToolRequest request, BooleanSupplier stopped) {
         Object parsed = offlineRequest(request, "explain");
         if (!(parsed instanceof OfflineRequest asked)) {
             return (CallToolResult) parsed;
         }
         ExplainReport report = explainer.explain(asked.script(), asked.files(), asked.catalog());
+        if (stopped.getAsBoolean()) {
+            return NOTHING_FINISHED;
+        }
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("valid", report.valid());
         data.put("findings", report.findings().stream().map(Tools::asData).toList());
@@ -347,13 +408,21 @@ final class Tools {
     }
 
     CallToolResult run(CallToolRequest request) {
+        return run(request, NEVER);
+    }
+
+    CallToolResult run(CallToolRequest request, BooleanSupplier stopped) {
         Object script = request.arguments() == null ? null : request.arguments().get("script");
         if (!(script instanceof String text)) {
             return failure("'script' is required: the text of the Relix script to run.");
         }
-        RunReport report = runner.run(text);
+        RunReport report = runner.run(text, stopped);
+        if (report.stopped() && report.results().isEmpty()) {
+            return NOTHING_FINISHED;
+        }
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("valid", report.valid());
+        data.put("stopped", report.stopped());
         data.put("findings", report.findings().stream().map(Tools::asData).toList());
         data.put("results", report.results().stream().map(Tools::asData).toList());
         return CallToolResult.builder()
@@ -427,6 +496,12 @@ final class Tools {
         data.put("failure", result.failure());
         return data;
     }
+
+    /**
+     * What a tool stopped at its deadline returns when nothing it can show finished: no
+     * content, so the deadline's own account is the whole answer.
+     */
+    private static final CallToolResult NOTHING_FINISHED = CallToolResult.builder().build();
 
     private static ToolAnnotations readOnly(String title) {
         return new ToolAnnotations(title, true, false, true, false, null);
