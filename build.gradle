@@ -14,7 +14,7 @@ plugins {
 }
 
 group = 'com.darkcollective.relix'
-version = '0.1.0-SNAPSHOT'
+version = '1.0.0-SNAPSHOT'
 
 repositories {
     mavenCentral()
@@ -27,10 +27,12 @@ java {
     }
 }
 
-ext.relixVersion = (findProperty('relixVersion') ?: '1.0.0-rc4') as String
+ext.relixVersion = (findProperty('relixVersion') ?: '1.0.0-rc9') as String
 
 dependencies {
     implementation "com.darkcollective.relix:relix:${relixVersion}"
+    // The language reference `learn` serves: published apart from the engine since rc8.
+    implementation "com.darkcollective.relix:relix-docs:${relixVersion}"
 
     implementation platform('io.modelcontextprotocol.sdk:mcp-bom:2.0.1')
     implementation 'io.modelcontextprotocol.sdk:mcp'
