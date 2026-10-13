@@ -1,5 +1,6 @@
 package com.darkcollective.relix.mcp.http;
 
+import com.darkcollective.relix.embed.Relix;
 import com.darkcollective.relix.mcp.HttpServers;
 import io.modelcontextprotocol.json.McpJsonDefaults;
 import io.modelcontextprotocol.json.McpJsonMapper;
@@ -33,7 +34,10 @@ class StatelessHttpTransportTest {
         assertThat(response.status()).isEqualTo(200);
         assertThat(response.headers().get("Content-Type")).startsWith("application/json");
         Map<?, ?> result = (Map<?, ?>) read(response).get("result");
-        assertThat(((Map<?, ?>) result.get("serverInfo")).get("name")).isEqualTo("relix");
+        Map<?, ?> server = (Map<?, ?>) result.get("serverInfo");
+        assertThat(server.get("name")).isEqualTo("relix");
+        assertThat(server.get("title")).isEqualTo("Relix (engine " + Relix.version() + ")");
+        assertThat(server.get("version")).isEqualTo(System.getProperty("relix.mcp.version"));
         assertThat((String) result.get("instructions")).contains("validate");
     }
 
