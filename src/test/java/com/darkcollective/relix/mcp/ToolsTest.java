@@ -242,9 +242,13 @@ class ToolsTest {
     }
 
     @Test
-    void aSearchWordMatchesTheStartOfAWordOnly() {
-        // "anti" is inside "quantifier"; that must not outrank the anti join.
-        assertThat(firstHit("ANTI")).isEqualTo("Anti join");
+    void anAsciiKeywordLandsOnItsPageNotTheQuantifier() {
+        // "anti" is inside "quantifier"; asking for the ASCII keyword ANTI must land on
+        // the anti join. The engine registers each operator's ASCII spelling as a page
+        // key, so ANTI now resolves to the page directly rather than through search.
+        String answer = text(tools.learn(call("learn", Map.of("topic", "ANTI"))));
+        assertThat(answer).contains("Anti Join").contains("▷")
+                .doesNotContain("Universal Quantification");
     }
 
     @Test

@@ -1,6 +1,6 @@
 package com.darkcollective.relix.mcp;
 
-import com.darkcollective.relix.embed.ReferencePage;
+import com.darkcollective.relix.docs.ReferencePage;
 import com.darkcollective.relix.mcp.run.QueryResult;
 import com.darkcollective.relix.mcp.run.RunReport;
 import com.darkcollective.relix.mcp.run.ScriptRunner;
