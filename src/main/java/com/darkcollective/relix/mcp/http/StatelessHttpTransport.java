@@ -112,6 +112,23 @@ public final class StatelessHttpTransport implements McpStatelessServerTransport
      * @return the response to send
      */
     public Response handle(String method, Map<String, List<String>> headers, String body) {
+        return handle(method, headers, body, McpTransportContext.EMPTY);
+    }
+
+    /**
+     * Answers one HTTP request to the MCP endpoint, giving the server {@code context} with
+     * it: what the caller knows of the request that the message does not say, such as when
+     * it must be answered by.
+     *
+     * @param method  the HTTP method
+     * @param headers the request headers, by name in any case
+     * @param body    the request body, or null when it has none
+     * @param context what the server's handlers are given with the message; must not be null
+     * @return the response to send
+     */
+    public Response handle(String method, Map<String, List<String>> headers, String body,
+                           McpTransportContext context) {
+        Objects.requireNonNull(context, "context");
         if (closing || handler == null) {
             return Response.text(503, "The server is shutting down.");
         }
@@ -147,16 +164,15 @@ public final class StatelessHttpTransport implements McpStatelessServerTransport
                     "The body is not a JSON-RPC message.");
         }
         return switch (message) {
-            case JSONRPCRequest request -> answer(request);
-            case JSONRPCNotification notification -> accept(notification);
+            case JSONRPCRequest request -> answer(request, context);
+            case JSONRPCNotification notification -> accept(notification, context);
             // A response answers a request, and a stateless server sends none.
             default -> error(400, null, McpSchema.ErrorCodes.INVALID_REQUEST,
                     "The server takes a request or a notification.");
         };
     }
 
-    private Response answer(JSONRPCRequest request) {
-        McpTransportContext context = McpTransportContext.EMPTY;
+    private Response answer(JSONRPCRequest request, McpTransportContext context) {
         try {
             JSONRPCResponse response = handler.handleRequest(context, request)
                     .contextWrite(ctx -> ctx.put(McpTransportContext.KEY, context))
@@ -168,8 +184,7 @@ public final class StatelessHttpTransport implements McpStatelessServerTransport
         }
     }
 
-    private Response accept(JSONRPCNotification notification) {
-        McpTransportContext context = McpTransportContext.EMPTY;
+    private Response accept(JSONRPCNotification notification, McpTransportContext context) {
         try {
             handler.handleNotification(context, notification)
                     .contextWrite(ctx -> ctx.put(McpTransportContext.KEY, context))

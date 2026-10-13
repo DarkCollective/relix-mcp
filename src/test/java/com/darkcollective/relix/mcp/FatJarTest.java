@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.zip.ZipFile;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -100,6 +101,15 @@ class FatJarTest {
     void learnReadsTheBundledPages() throws Exception {
         assertThat(call("learn", "{\"topic\":\"σ\"}")).contains("Selection");
         assertThat(call("learn", "{\"topic\":\"round\"}")).contains("Round");
+    }
+
+    @Test
+    void lambdaCanLoadTheHandler() throws Exception {
+        try (ZipFile jar = new ZipFile(System.getProperty("relix.mcp.fatJar"))) {
+            assertThat(jar.getEntry("com/darkcollective/relix/mcp/aws/LambdaHandler.class")).isNotNull();
+            assertThat(jar.getEntry("com/amazonaws/services/lambda/runtime/RequestStreamHandler.class"))
+                    .isNotNull();
+        }
     }
 
     private String call(String tool, String arguments) throws Exception {
