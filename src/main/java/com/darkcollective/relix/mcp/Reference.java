@@ -1,6 +1,7 @@
 package com.darkcollective.relix.mcp;
 
-import com.darkcollective.relix.embed.ReferencePage;
+import com.darkcollective.relix.docs.ReferencePage;
+import com.darkcollective.relix.docs.RelixDocs;
 import com.darkcollective.relix.embed.Relix;
 import com.darkcollective.relix.function.AggregateFunction;
 import com.darkcollective.relix.function.FunctionLibrary;
@@ -16,14 +17,14 @@ import java.util.TreeMap;
 import java.util.stream.Collectors;
 
 /**
- * The language reference, as the engine jar ships it.
+ * The language reference, as the engine publishes it.
  *
  * <p>Nothing here is written for the server. It comes from two public sources, the same
  * two the REPL's {@code :doc} reads:
  *
  * <ul>
  *   <li>the <strong>language</strong> pages — operators, joins, statements — from
- *       {@link Relix#referencePages()} and {@link Relix#referencePage(String)};</li>
+ *       {@link RelixDocs#referencePages()} and {@link RelixDocs#referencePage(String)};</li>
  *   <li>the <strong>function</strong> pages from each installed {@link FunctionLibrary},
  *       found the way the engine finds them, through {@link ServiceLoader}. A function's
  *       page belongs to the library that offers it, so a library added to the class path
@@ -40,7 +41,7 @@ final class Reference {
                                 FunctionLibrary library) {
     }
 
-    private final List<ReferencePage> pages = Relix.referencePages();
+    private final List<ReferencePage> pages = RelixDocs.referencePages();
     private final List<FunctionPage> functions = functionPages();
 
     /**
@@ -89,7 +90,7 @@ final class Reference {
                         || p.keys().contains(wanted) || p.keys().contains(folded)
                         || p.title().equalsIgnoreCase(wanted))
                 .findFirst()
-                .flatMap(p -> Relix.referencePage(p.path()));
+                .flatMap(p -> RelixDocs.referencePage(p.path()));
         if (language.isPresent()) {
             return language;
         }
@@ -186,7 +187,7 @@ final class Reference {
     private List<Page> corpus() {
         List<Page> corpus = new ArrayList<>();
         for (ReferencePage page : pages) {
-            String markdown = Relix.referencePage(page.path()).orElse("");
+            String markdown = RelixDocs.referencePage(page.path()).orElse("");
             corpus.add(new Page(page.title(), page.path(), page.summary(), markdown,
                     fold(page.title() + " " + page.symbol() + " " + page.summary() + " "
                             + String.join(" ", page.keys())),

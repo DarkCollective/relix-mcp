@@ -1,5 +1,6 @@
 package com.darkcollective.relix.mcp;
 
+import com.darkcollective.relix.docs.RelixDocs;
 import com.darkcollective.relix.embed.Relix;
 import org.junit.jupiter.api.Test;
 
@@ -10,6 +11,7 @@ import java.lang.module.ModuleFinder;
 import java.lang.module.ModuleReference;
 import java.net.URISyntaxException;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.regex.Matcher;
@@ -23,11 +25,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * This server uses the engine only through what the engine publishes.
  *
  * <p>On a module path the compiler would enforce that, but the MCP SDK cannot go on one,
- * so the server builds on the class path, where every package of the engine jar is
+ * so the server builds on the class path, where every package of the engine's jars is
  * readable. This test puts the rule back: {@code jdeps} lists every engine package the
- * compiled classes reference, and each must be one the jar's own module descriptor
- * exports. The export list is read from the jar rather than written here, so it cannot
- * go stale when the engine version moves.
+ * compiled classes reference, and each must be one that the module descriptor of the
+ * engine jar or of the reference jar ({@code relix-docs}) exports. The export lists are
+ * read from the jars rather than written here, so they cannot go stale when the engine
+ * version moves.
  */
 class EngineBoundaryTest {
 
@@ -40,19 +43,25 @@ class EngineBoundaryTest {
         Set<String> exported = exportedPackages();
         Set<String> used = enginePackagesUsedBy(location(Tools.class));
 
-        assertThat(exported).as("the engine jar's exports").contains("com.darkcollective.relix.embed");
+        assertThat(exported).as("the engine jars' exports")
+                .contains("com.darkcollective.relix.embed", "com.darkcollective.relix.docs");
         assertThat(used).as("engine packages referenced").isNotEmpty();
         assertThat(used).as("engine packages referenced but not exported")
                 .isSubsetOf(exported);
     }
 
     private static Set<String> exportedPackages() throws URISyntaxException {
-        ModuleReference engine = ModuleFinder.of(location(Relix.class)).findAll().stream()
-                .findFirst().orElseThrow(() -> new AssertionError("the engine jar is not a module"));
-        return engine.descriptor().exports().stream()
-                .filter(e -> !e.isQualified())
-                .map(ModuleDescriptor.Exports::source)
-                .collect(Collectors.toCollection(TreeSet::new));
+        Set<String> exported = new TreeSet<>();
+        for (Class<?> published : List.of(Relix.class, RelixDocs.class)) {
+            Path path = location(published);
+            ModuleReference jar = ModuleFinder.of(path).findAll().stream()
+                    .findFirst().orElseThrow(() -> new AssertionError(path + " is not a module"));
+            jar.descriptor().exports().stream()
+                    .filter(e -> !e.isQualified())
+                    .map(ModuleDescriptor.Exports::source)
+                    .forEach(exported::add);
+        }
+        return exported;
     }
 
     private static Set<String> enginePackagesUsedBy(Path classes) {
