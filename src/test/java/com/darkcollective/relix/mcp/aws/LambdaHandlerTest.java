@@ -78,6 +78,25 @@ class LambdaHandlerTest {
     }
 
     @Test
+    void behindACdnThePathIsTheCdns() throws IOException {
+        LambdaHandler behindCdn = new LambdaHandler(new ApiKeyAuthenticator(KEY),
+                new ScriptRunner(), "/mcp/private");
+        Map<String, Object> event = event(KEY, call(1, "learn", ""));
+        event.put("rawPath", "/mcp/private");
+
+        assertThat(behindCdn.respond(event, Deadline.after(Duration.ofSeconds(30))).status())
+                .isEqualTo(200);
+        event.put("rawPath", "/mcp");
+        assertThat(behindCdn.respond(event, Deadline.after(Duration.ofSeconds(30))).status())
+                .isEqualTo(404);
+        assertThat(LambdaHandler.path(Map.of())).isEqualTo(LambdaHandler.PATH);
+        assertThat(LambdaHandler.path(Map.of(LambdaHandler.PATH_VARIABLE, "/mcp/private")))
+                .isEqualTo("/mcp/private");
+        assertThatThrownBy(() -> LambdaHandler.path(Map.of(LambdaHandler.PATH_VARIABLE, "mcp")))
+                .hasMessageContaining(LambdaHandler.PATH_VARIABLE);
+    }
+
+    @Test
     void aNotificationHasNoBody() throws IOException {
         Map<?, ?> answer = invoke(event(KEY,
                 "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}"),

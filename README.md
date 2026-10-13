@@ -113,7 +113,8 @@ each tool, since a provider lost in merging fails nothing earlier.
 The same jar is a Lambda function. Its handler,
 [`LambdaHandler`](src/main/java/com/darkcollective/relix/mcp/aws/LambdaHandler.java),
 takes payload format 2.0 events, which is what a Function URL sends, and answers at
-`/mcp`:
+`/mcp`, or at the path `RELIX_MCP_PATH` gives (behind a CDN that forwards its own path,
+such as `/mcp/private`, that path):
 
 | Setting | Value |
 |---|---|
