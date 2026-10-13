@@ -1,6 +1,7 @@
 package com.darkcollective.relix.mcp.run;
 
 import com.darkcollective.relix.embed.Sandbox;
+import com.darkcollective.relix.mcp.SlowScript;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -10,8 +11,11 @@ import java.math.BigDecimal;
 import java.net.InetSocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -162,6 +166,35 @@ class ScriptRunnerTest {
         assertThat(report.results().getFirst().ran()).isFalse();
         assertThat(report.results().getFirst().failure()).contains("50");
         assertThat(report.results().get(1).ran()).isTrue();
+    }
+
+    @Test
+    void aStoppedRunReturnsTheQueriesThatFinishedFirst() throws InterruptedException {
+        ScriptRunner unbounded = new ScriptRunner(Sandbox.builder().build());
+        AtomicBoolean stopped = new AtomicBoolean();
+        AtomicReference<RunReport> report = new AtomicReference<>();
+        Thread worker = Thread.ofVirtual().start(() ->
+                report.set(unbounded.run(SlowScript.TEXT, stopped::get)));
+
+        Thread.sleep(500);
+        stopped.set(true);
+        worker.interrupt();
+        worker.join(Duration.ofSeconds(5));
+
+        assertThat(worker.isAlive()).as("the engine noticed the interrupt").isFalse();
+        assertThat(report.get().stopped()).isTrue();
+        assertThat(report.get().results()).hasSize(1);
+        assertThat(report.get().results().getFirst().rows()).containsExactly(List.of(BigDecimal.TEN));
+        assertThat(report.get().render()).endsWith("Stopped before query 2 finished.");
+    }
+
+    @Test
+    void theQueryTimeoutIsTheCallersToSet() {
+        assertThat(ScriptRunner.DEFAULT_SANDBOX.timeout()).contains(ScriptRunner.DEFAULT_QUERY_TIMEOUT);
+        assertThat(ScriptRunner.sandbox(Duration.ofSeconds(40)).timeout()).contains(Duration.ofSeconds(40));
+        assertThat(ScriptRunner.sandbox(null).timeout()).isEmpty();
+        assertThat(ScriptRunner.sandbox(null).maxOutputRows())
+                .isEqualTo(ScriptRunner.DEFAULT_SANDBOX.maxOutputRows());
     }
 
     @Test

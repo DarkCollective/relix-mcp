@@ -45,7 +45,8 @@ looking, the caller says:
 always accepts what reads nothing outside the session, so a script can compute over the
 data it writes out and can reach nothing else. The sandbox's limits bound each call: at
 most 200 rows per query (a longer result is cut, and says so), 10 seconds per query, and
-caps on buffered rows, recursion rounds and rows passed between operators.
+caps on buffered rows, recursion rounds and rows passed between operators. On Lambda the
+per-query time is configurable, and a deadline bounds the whole call (below).
 
 ## Running it
 
@@ -98,7 +99,7 @@ serves it with the JDK's own, and a serverless handler calls the same function.
 
 ```bash
 ./gradlew shadowJar
-java -jar build/libs/relix-mcp-0.1.0-SNAPSHOT-all.jar --http
+java -jar build/libs/relix-mcp-1.0.0-SNAPSHOT-all.jar --http
 ```
 
 The server, the engine and the SDK in one jar, which is what a function platform
@@ -106,6 +107,50 @@ deploys. The engine finds its function library and connectors through `ServiceLo
 so the jar concatenates every `META-INF/services` file rather than keeping the first,
 and `FatJarTest` (run by `./gradlew fatJarTest`, part of `check`) starts it and calls
 each tool, since a provider lost in merging fails nothing earlier.
+
+### On AWS Lambda, as a private endpoint
+
+The same jar is a Lambda function. Its handler,
+[`LambdaHandler`](src/main/java/com/darkcollective/relix/mcp/aws/LambdaHandler.java),
+takes payload format 2.0 events, which is what a Function URL sends, and answers at
+`/mcp`:
+
+| Setting | Value |
+|---|---|
+| Runtime | `java21` |
+| Handler | `com.darkcollective.relix.mcp.aws.LambdaHandler::handleRequest` |
+| Code | `build/libs/relix-mcp-<version>-all.jar` |
+| Layer | AWS Parameters and Secrets Lambda Extension |
+| Front door | a Function URL with auth type `NONE`: the handler checks the key |
+
+Every request must carry the API key in an `X-Api-Key` header, or it is refused with
+401 before any MCP processing. The key is read once, when the function starts, through
+the Parameters and Secrets extension, from whichever of these the environment names
+(the function's role needs read access to it, and `kms:Decrypt` for its key):
+
+- `RELIX_MCP_API_KEY_PARAMETER`: a Parameter Store `SecureString`, or
+- `RELIX_MCP_API_KEY_SECRET`: a Secrets Manager secret.
+
+With neither, the function does not start; it never serves without a key. Give it a
+reserved-concurrency cap too: the key limits who can call it, and the cap limits what a
+leaked key can cost.
+
+A client connects with the key as a header:
+
+```bash
+claude mcp add --transport http relix https://<url-id>.lambda-url.<region>.on.aws/mcp --header "X-Api-Key: <key>"
+```
+
+**Time.** The function's own timeout is the limit, and raising it is a configuration
+change only. The handler stops a call two seconds inside it, so a script that runs too
+long is answered with an error saying it was stopped at the limit, followed by the
+queries that finished first, rather than cut off by the platform with a bare 5xx. The
+one exception is work that never passes a row between two operators, such as a solver's
+search in `OPTIMIZE` or `COVER EXACT`: it does not notice being stopped, so the call
+answers without what it was doing. One query may also run for
+`RELIX_MCP_QUERY_TIMEOUT_SECONDS` (10 by default; `0` leaves only the limit on the whole
+call). Prefer a Function URL to an API Gateway HTTP API, which caps an integration at
+about 30 seconds whatever the function allows.
 
 ## Built on the published engine, and nothing else
 
