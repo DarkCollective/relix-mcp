@@ -44,6 +44,9 @@ import java.util.function.Supplier;
  *   <li>{@value #KEY_SECRET}: the Secrets Manager secret holding it. Exactly one of the two
  *       is required, and the key is read once, when the function starts, through the AWS
  *       Parameters and Secrets extension.</li>
+ *   <li>{@value #PATH_VARIABLE}: the path the server answers at, {@value #PATH} unless it
+ *       says another; behind a CDN that forwards its own path, such as
+ *       {@code /mcp/private}, the CDN's.</li>
  *   <li>{@value #QUERY_TIMEOUT}: how many seconds one query of a {@code run} may take;
  *       {@code 0} leaves only the deadline on the whole call. Unset, it is
  *       {@link ScriptRunner#DEFAULT_QUERY_TIMEOUT}.</li>
@@ -51,8 +54,11 @@ import java.util.function.Supplier;
  */
 public final class LambdaHandler implements RequestStreamHandler {
 
-    /** The path the server answers at, as it does when served locally. */
+    /** The path the server answers at by default, as it does when served locally. */
     public static final String PATH = "/mcp";
+
+    /** The variable giving the path the server answers at. */
+    public static final String PATH_VARIABLE = "RELIX_MCP_PATH";
 
     /** The variable naming the Parameter Store parameter that holds the API key. */
     public static final String KEY_PARAMETER = "RELIX_MCP_API_KEY_PARAMETER";
@@ -66,6 +72,7 @@ public final class LambdaHandler implements RequestStreamHandler {
     private static final McpJsonMapper JSON = McpJsonDefaults.getMapper();
 
     private final Authenticator authenticator;
+    private final String path;
     private final StatelessHttpTransport transport;
 
     /**
@@ -79,7 +86,7 @@ public final class LambdaHandler implements RequestStreamHandler {
 
     LambdaHandler(Map<String, String> env) {
         this(new ApiKeyAuthenticator(apiKey(env, () -> ParametersAndSecrets.of(env, JSON))),
-                new ScriptRunner(ScriptRunner.sandbox(queryTimeout(env))));
+                new ScriptRunner(ScriptRunner.sandbox(queryTimeout(env))), path(env));
     }
 
     /**
@@ -90,7 +97,20 @@ public final class LambdaHandler implements RequestStreamHandler {
      * @param runner        runs the scripts {@code run} is given
      */
     public LambdaHandler(Authenticator authenticator, ScriptRunner runner) {
+        this(authenticator, runner, PATH);
+    }
+
+    /**
+     * A handler letting in what {@code authenticator} allows, running scripts with
+     * {@code runner}, and answering at {@code path}.
+     *
+     * @param authenticator decides who may call
+     * @param runner        runs the scripts {@code run} is given
+     * @param path          the path the server answers at, such as {@value #PATH}
+     */
+    public LambdaHandler(Authenticator authenticator, ScriptRunner runner, String path) {
         this.authenticator = Objects.requireNonNull(authenticator, "authenticator");
+        this.path = Objects.requireNonNull(path, "path");
         // No Origin or Host check: there is no local name to rebind, and the key, which a
         // browser does not send across origins unasked, is the check.
         this.transport = new StatelessHttpTransport(JSON, ServerTransportSecurityValidator.NOOP);
@@ -127,9 +147,9 @@ public final class LambdaHandler implements RequestStreamHandler {
         if (refused.isPresent()) {
             return refused.get();
         }
-        if (!PATH.equals(event.get("rawPath"))) {
+        if (!path.equals(event.get("rawPath"))) {
             return new Response(404, Map.of("Content-Type", "text/plain; charset=utf-8"),
-                    "The MCP endpoint is " + PATH + ".");
+                    "The MCP endpoint is " + path + ".");
         }
         String method = event.get("requestContext") instanceof Map<?, ?> request
                 && request.get("http") instanceof Map<?, ?> http
@@ -184,6 +204,21 @@ public final class LambdaHandler implements RequestStreamHandler {
             throw new IllegalStateException("the API key is empty");
         }
         return key;
+    }
+
+    /**
+     * The path to answer at, from the environment.
+     */
+    static String path(Map<String, String> env) {
+        String path = env.get(PATH_VARIABLE);
+        if (path == null || path.isBlank()) {
+            return PATH;
+        }
+        if (!path.startsWith("/")) {
+            throw new IllegalStateException(PATH_VARIABLE + " is a path from the root, "
+                    + "such as /mcp, not '" + path + "'");
+        }
+        return path;
     }
 
     /**
