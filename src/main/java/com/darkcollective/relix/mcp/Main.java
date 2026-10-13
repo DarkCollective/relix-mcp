@@ -11,6 +11,7 @@ import io.modelcontextprotocol.server.McpStatelessServerFeatures;
 import io.modelcontextprotocol.server.McpStatelessSyncServer;
 import io.modelcontextprotocol.server.McpSyncServer;
 import io.modelcontextprotocol.server.transport.StdioServerTransportProvider;
+import io.modelcontextprotocol.spec.McpSchema.Implementation;
 import io.modelcontextprotocol.spec.McpSchema.ServerCapabilities;
 
 import java.io.IOException;
@@ -76,7 +77,7 @@ public final class Main {
         } else {
             McpSyncServer server = McpServer.sync(
                             new StdioServerTransportProvider(McpJsonDefaults.getMapper()))
-                    .serverInfo("relix", version())
+                    .serverInfo(serverInfo())
                     .instructions(INSTRUCTIONS)
                     .capabilities(ServerCapabilities.builder().tools(false).build())
                     .tools(new Tools().all().stream().map(tool ->
@@ -126,13 +127,25 @@ public final class Main {
     public static McpStatelessSyncServer statelessServer(StatelessHttpTransport transport,
                                                          ScriptRunner runner) {
         return McpServer.sync(transport)
-                .serverInfo("relix", version())
+                .serverInfo(serverInfo())
                 .instructions(INSTRUCTIONS)
                 .capabilities(ServerCapabilities.builder().tools(false).build())
                 .tools(new Tools(runner).all().stream().map(tool ->
                         new McpStatelessServerFeatures.SyncToolSpecification(tool.tool(),
                                 (context, request) -> Deadline.call(tool, request, context)))
                         .toList())
+                .build();
+    }
+
+    /**
+     * What the server tells a client it is: {@code relix}, at relix-mcp's own version, with
+     * a title naming the engine it runs. The version is the server program's, which is what
+     * the field is for; the engine's, which is what decides whether a script is valid, is in
+     * the title, where a client can read it without parsing the instructions.
+     */
+    static Implementation serverInfo() {
+        return Implementation.builder("relix", version())
+                .title("Relix (engine " + Relix.version() + ")")
                 .build();
     }
 
