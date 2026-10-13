@@ -4,18 +4,26 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.BufferedReader;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -44,22 +52,35 @@ class FatJarTest {
     static void start() throws Exception {
         Path jar = Path.of(System.getProperty("relix.mcp.fatJar", "(fatJar not set)"));
         assertThat(jar).as("run through the fatJarTest task, which builds it").isRegularFile();
+        server = serve("-jar", jar.toString());
+        endpoint = endpointOf(server);
+    }
+
+    /**
+     * Starts the server with {@code java}, {@code launch} naming the classes, over HTTP on a
+     * free port.
+     */
+    private static Process serve(String... launch) throws Exception {
         Path java = Path.of(System.getProperty("java.home"), "bin", "java");
-        server = new ProcessBuilder(java.toString(), "-jar", jar.toString(), "--http", "--port", "0")
-                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                .start();
+        List<String> command = new ArrayList<>(List.of(java.toString()));
+        command.addAll(List.of(launch));
+        command.addAll(List.of("--http", "--port", "0"));
+        return new ProcessBuilder(command).redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
+    }
+
+    /** Where {@code process} says it is serving, read from its first words. */
+    private static URI endpointOf(Process process) throws Exception {
         BufferedReader err = new BufferedReader(
-                new InputStreamReader(server.getErrorStream(), StandardCharsets.UTF_8));
+                new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8));
         StringBuilder seen = new StringBuilder();
         for (String line; (line = err.readLine()) != null; ) {
             seen.append(line).append('\n');
             Matcher serving = SERVING.matcher(line);
             if (serving.find()) {
-                endpoint = URI.create(serving.group(1));
-                break;
+                return URI.create(serving.group(1));
             }
         }
-        assertThat(endpoint).as("the server's first words:\n" + seen).isNotNull();
+        throw new AssertionError("the server's first words:\n" + seen);
     }
 
     @AfterAll
@@ -77,7 +98,42 @@ class FatJarTest {
                  "protocolVersion":"2025-06-18","capabilities":{},
                  "clientInfo":{"name":"fat-jar-test","version":"1"}}}""");
 
-        assertThat(body).contains("\"name\":\"relix\"").contains("engine");
+        assertThat(body).contains("\"name\":\"relix\"").contains("engine")
+                .contains("\"version\":\"" + System.getProperty("relix.mcp.version") + "\"");
+    }
+
+    /**
+     * AWS Lambda unpacks the deployment jar and runs its classes from a directory, where no
+     * manifest is read; the version must survive that.
+     */
+    @Test
+    void unpackedTheJarStillReportsItsVersion(@TempDir Path unpacked) throws Exception {
+        try (ZipFile jar = new ZipFile(System.getProperty("relix.mcp.fatJar"))) {
+            for (ZipEntry entry : Collections.list(jar.entries())) {
+                Path target = unpacked.resolve(entry.getName()).normalize();
+                assertThat(target.startsWith(unpacked)).as(entry.getName()).isTrue();
+                if (entry.isDirectory()) {
+                    Files.createDirectories(target);
+                } else {
+                    Files.createDirectories(target.getParent());
+                    try (InputStream in = jar.getInputStream(entry)) {
+                        Files.copy(in, target, StandardCopyOption.REPLACE_EXISTING);
+                    }
+                }
+            }
+        }
+        Process loose = serve("-cp", unpacked.toString(), Main.class.getName());
+        try {
+            String body = post(endpointOf(loose), """
+                    {"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+                     "protocolVersion":"2025-06-18","capabilities":{},
+                     "clientInfo":{"name":"fat-jar-test","version":"1"}}}""");
+
+            assertThat(body).contains("\"version\":\"" + System.getProperty("relix.mcp.version") + "\"");
+        } finally {
+            loose.destroy();
+            loose.waitFor(10, TimeUnit.SECONDS);
+        }
     }
 
     @Test
@@ -118,6 +174,10 @@ class FatJarTest {
     }
 
     private String post(String body) throws Exception {
+        return post(endpoint, body);
+    }
+
+    private String post(URI endpoint, String body) throws Exception {
         HttpResponse<String> response = client.send(HttpRequest.newBuilder(endpoint)
                         .header("Accept", "application/json, text/event-stream")
                         .header("Content-Type", "application/json")
