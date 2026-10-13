@@ -14,9 +14,11 @@ import io.modelcontextprotocol.server.transport.StdioServerTransportProvider;
 import io.modelcontextprotocol.spec.McpSchema.ServerCapabilities;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.util.List;
+import java.util.Properties;
 
 /**
  * Runs the server.
@@ -134,9 +136,26 @@ public final class Main {
                 .build();
     }
 
-    private static String version() {
-        String version = Main.class.getPackage().getImplementationVersion();
-        return version == null ? "dev" : version;
+    /**
+     * The version the build wrote into {@code version.properties} beside this class, or
+     * {@code dev} when there is none, as when the classes were compiled by something other
+     * than the build. A resource rather than the jar's manifest, because a function platform
+     * may unpack the jar, and then no manifest is read.
+     */
+    static String version() {
+        try (InputStream in = Main.class.getResourceAsStream("version.properties")) {
+            if (in != null) {
+                Properties properties = new Properties();
+                properties.load(in);
+                String version = properties.getProperty("version");
+                if (version != null && !version.isBlank()) {
+                    return version;
+                }
+            }
+        } catch (IOException e) {
+            // Unreadable is the same as absent.
+        }
+        return "dev";
     }
 
     /**

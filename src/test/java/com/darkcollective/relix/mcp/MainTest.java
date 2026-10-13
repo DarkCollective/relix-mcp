@@ -21,6 +21,12 @@ class MainTest {
     private final HttpClient client = HttpClient.newBuilder().proxy(HttpClient.Builder.NO_PROXY).build();
 
     @Test
+    void theVersionIsTheBuildsNotTheFallback() {
+        assertThat(Main.version()).isNotEqualTo("dev")
+                .isEqualTo(System.getProperty("relix.mcp.version"));
+    }
+
+    @Test
     void noArgumentsIsStdio() {
         assertThat(Options.parse(List.of()).http()).isFalse();
     }

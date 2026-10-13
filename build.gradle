@@ -54,6 +54,15 @@ application {
     mainClass = 'com.darkcollective.relix.mcp.Main'
 }
 
+// The version the server reports, as a resource beside its classes. A manifest is read only
+// from a jar, and AWS Lambda unpacks the deployment jar into loose classes, so the version
+// travels as a classpath resource, which is found however the classes are laid out.
+def versionResource = tasks.register('versionResource', WriteProperties) {
+    destinationFile = layout.buildDirectory.file('generated/version/com/darkcollective/relix/mcp/version.properties')
+    property('version', project.version.toString())
+}
+sourceSets.main.resources.srcDir(versionResource.map { layout.buildDirectory.dir('generated/version').get() })
+
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
     options.compilerArgs += ['-Xlint:all', '-Werror']
@@ -72,6 +81,7 @@ test {
     useJUnitPlatform {
         excludeTags 'fat-jar'
     }
+    systemProperty 'relix.mcp.version', project.version.toString()
 }
 
 // `relix-mcp-<version>-all.jar`: everything on the runtime class path in one jar, run with
@@ -103,6 +113,7 @@ def fatJarTest = tasks.register('fatJarTest', Test) {
     def jar = tasks.named('shadowJar').flatMap { it.archiveFile }
     inputs.file(jar)
     systemProperty 'relix.mcp.fatJar', jar.get().asFile.absolutePath
+    systemProperty 'relix.mcp.version', project.version.toString()
     mustRunAfter tasks.named('test')
 }
 
