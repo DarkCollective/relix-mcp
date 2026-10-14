@@ -94,6 +94,12 @@ test {
 // nowhere earlier, which is why fatJarTest starts the jar and asks it to use each one.
 tasks.named('shadowJar') {
     mergeServiceFiles()
+    // Several jars carry a license and notice by the same name, under different licenses
+    // (SLF4J's is MIT, Jackson's Apache 2.0), and each must travel with the jar. Joined,
+    // every text is kept in the one entry a reader of the jar sees.
+    append 'META-INF/LICENSE'
+    append 'META-INF/LICENSE.txt'
+    append 'META-INF/NOTICE'
     duplicatesStrategy = DuplicatesStrategy.INCLUDE
     // A module descriptor describes one jar; in a merged one it would describe the wrong
     // contents. Signatures cover a jar's own entries and are void once they are merged.
