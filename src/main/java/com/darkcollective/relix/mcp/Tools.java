@@ -95,8 +95,12 @@ final class Tools {
             A view is Name := { expression }; and the braces are required. A result is \
             query Name; or query { expression };
 
-            Operators (ASCII keyword, then glyph): SELECT cond (R) σ filters rows; \
-            PROJECT a, b * 2 -> c (R) π chooses columns; GROUP k, SUM(x) -> total, COUNT(*) -> n (R) γ; \
+            Operators (ASCII keyword, then glyph):
+            SELECT cond (R) σ keeps the rows where cond holds. It is a filter, not SQL's SELECT.
+            PROJECT a, b * 2 -> c (R) π chooses and computes columns: this is SQL's SELECT list.
+            GROUP k, SUM(x) -> total, COUNT(*) -> n (R) γ aggregates. SUM, COUNT, AVG, MIN and \
+            MAX work only inside GROUP; with no k, GROUP SUM(x) -> total (R) gives one row for \
+            the whole relation.
             SORT x DESC (R) τ; LIMIT n (R) λ; RENAME (old -> new) (R) ρ; DISTINCT (R) δ; \
             A JOIN B ⋈ joins on every shared column name; A >< A.id = B.a_id B joins on a \
             condition written between the inputs; LJOIN, RJOIN, FJOIN (outer) and SEMI, ANTI \
