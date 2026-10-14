@@ -33,6 +33,9 @@ dependencies {
     implementation "com.darkcollective.relix:relix:${relixVersion}"
     // The language reference `learn` serves: published apart from the engine since rc8.
     implementation "com.darkcollective.relix:relix-docs:${relixVersion}"
+    // The solver OPTIMIZE and COVER EXACT need. The engine finds it by ServiceLoader and
+    // nothing requires it, so it is never pulled in transitively.
+    runtimeOnly "com.darkcollective.relix:relix-solver-ojalgo:${relixVersion}"
 
     implementation platform('io.modelcontextprotocol.sdk:mcp-bom:2.0.1')
     implementation 'io.modelcontextprotocol.sdk:mcp'
@@ -85,7 +88,7 @@ test {
 }
 
 // `relix-mcp-<version>-all.jar`: everything on the runtime class path in one jar, run with
-// `java -jar`. The engine discovers its function library, connectors and reference pages
+// `java -jar`. The engine discovers its function library, connectors, solver and reference pages
 // through ServiceLoader, so the META-INF/services files of every jar are concatenated
 // rather than the first one winning: a lost entry is a missing provider at run time and
 // nowhere earlier, which is why fatJarTest starts the jar and asks it to use each one.
