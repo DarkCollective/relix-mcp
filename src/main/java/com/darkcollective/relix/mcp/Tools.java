@@ -104,9 +104,15 @@ final class Tools {
             Customers ANTI Customers.id = Orders.customer_id Orders. UNION, EXCEPT, INTERSECT.
             Predicates: = != < <= > >=, AND, OR, NOT, x IN {1, 2}, x LIKE 'A%', x IS NULL. \
             Sets take braces, not parentheses. <> is not an operator. Comments are -- to end of line.
-            Relix also has operators SQL lacks: graph reachability and paths, pairwise test \
-            coverage, sessions, time-series downsampling, as-of joins, recursion and more. \
-            Before writing code in another language, describe the task to 'learn'.
+            Relix also has operators SQL lacks, each with its own page: graph reachability \
+            and paths (CLOSURE, PATH, TRACE), recursion (FIX), iteration to convergence \
+            (ITERATE), optimisation and constraint solving (OPTIMIZE, SOLVE), pairwise test \
+            coverage (COVER), sessions (SESSIONIZE), time-series downsampling (DOWNSAMPLE), \
+            as-of joins (ASOF), top rows per group (TOP), sampling (SAMPLE), clustering \
+            (CLUSTER) and record linkage. Before writing anything, describe the task to \
+            'learn': it searches every page, and Relix may have an operator for it. Never \
+            hard-code a result computed elsewhere into a script: 'run' would show those rows \
+            as if the engine had found them.
             """;
 
     private static final String VALIDATE_DESCRIPTION = """
@@ -345,8 +351,8 @@ final class Tools {
                 For a reader that can fetch a URL, the site publishes a primer at %s and \
                 the grammar as plain text at %s; they describe the current release.
 
-                Relix has operators SQL lacks. Before writing code in another language for \
-                something a query does not obviously express, search here. Among them:
+                Relix has operators SQL lacks. Before writing anything for a task a query \
+                does not obviously express, describe the task here. Among them:
                 """.formatted(GRAMMAR_PAGE, LLMS_TXT, GRAMMAR_TXT));
         for (ReferencePage page : reference.category("advanced")) {
             out.append("- ").append(page.title()).append(": ").append(page.summary()).append('\n');
