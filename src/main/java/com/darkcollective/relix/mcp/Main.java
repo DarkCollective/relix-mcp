@@ -35,14 +35,14 @@ public final class Main {
     static final String INSTRUCTIONS = """
             Checks scripts in Relix, a relational-algebra query language, against engine \
             %s. Write a script against the tables and columns you were given, never ones \
-            you imagine. Before showing a Relix script to anyone, pass it to 'validate', fix \
+            you imagine. Before showing a Relix script to anyone, pass it to 'relix_validate', fix \
             what it reports, and validate it again after every change: a script is ready \
-            only once 'validate' says Valid ('run' and 'submit' validate first, so a script \
-            you run needs no separate call). To show what a script returns, 'run' it over \
+            only once 'relix_validate' says Valid ('relix_run' and 'relix_submit' validate first, so a script \
+            you run needs no separate call). To show what a script returns, 'relix_run' it over \
             inline tables rather than predicting the rows; to show how it would run, and the SQL it would send \
-            to a database, use 'explain'. Use 'learn' for the reference page of an operator, \
+            to a database, use 'relix_explain'. Use 'relix_learn' for the reference page of an operator, \
             function or keyword you are unsure of, and learn '%s' for the whole grammar. \
-            Finish by calling 'submit' with the finished script, and show the user its \
+            Finish by calling 'relix_submit' with the finished script, and show the user its \
             output unchanged: it holds the script and the rows the engine returned for it. \
             The same material is published at %s and %s.""".formatted(Relix.version(),
             Tools.GRAMMAR_PAGE, Tools.LLMS_TXT, Tools.GRAMMAR_TXT);
@@ -119,12 +119,12 @@ public final class Main {
     }
 
     /**
-     * The tools, served statelessly over {@code transport}, {@code run} with
+     * The tools, served statelessly over {@code transport}, {@code relix_run} with
      * {@code runner}'s limits. A call whose request carries a {@link Deadline} answers by
      * it.
      *
      * @param transport carries the requests; the server registers itself as its handler
-     * @param runner    runs the scripts {@code run} is given
+     * @param runner    runs the scripts {@code relix_run} is given
      * @return the server
      */
     public static McpStatelessSyncServer statelessServer(StatelessHttpTransport transport,

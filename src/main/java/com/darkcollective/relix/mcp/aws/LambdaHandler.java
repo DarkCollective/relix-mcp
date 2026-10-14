@@ -47,7 +47,7 @@ import java.util.function.Supplier;
  *   <li>{@value #PATH_VARIABLE}: the path the server answers at, {@value #PATH} unless it
  *       says another; behind a CDN that forwards its own path, such as
  *       {@code /mcp/private}, the CDN's.</li>
- *   <li>{@value #QUERY_TIMEOUT}: how many seconds one query of a {@code run} may take;
+ *   <li>{@value #QUERY_TIMEOUT}: how many seconds one query of a {@code relix_run} may take;
  *       {@code 0} leaves only the deadline on the whole call. Unset, it is
  *       {@link ScriptRunner#DEFAULT_QUERY_TIMEOUT}.</li>
  * </ul>
@@ -87,19 +87,19 @@ public final class LambdaHandler implements RequestStreamHandler {
             {"jsonrpc":"2.0","id":1,"method":"initialize","params":{
              "protocolVersion":"2025-06-18","capabilities":{},
              "clientInfo":{"name":"warm-up","version":"1"}}}""",
-            call(2, "validate", """
+            call(2, "relix_validate", """
                     {"script":"query { PROJECT Round(2.6) -> r (UNIT) };"}"""),
-            call(3, "explain", """
+            call(3, "relix_explain", """
                     {"script":"connection wh from jdbc { url: \\"jdbc:postgresql://db.invalid/wh\\" };\\n\
                     query { SELECT amount > 100 (wh.orders) };",
                      "catalog":{"wh":{"orders":{"amount":"NUMBER"}}}}"""),
-            call(4, "run", """
+            call(4, "relix_run", """
                     {"script":"Backlog := [\\n| feature | value | cost |\\n|---|---|---|\\n\
                     | A | 60 | 10 |\\n| B | 100 | 20 |\\n];\\n\
                     query { OPTIMIZE MAXIMIZE SUM(value) SUBJECT TO SUM(cost) <= 20 (Backlog) };"}"""),
-            call(5, "submit", """
+            call(5, "relix_submit", """
                     {"script":"query { PROJECT Round(2.6) -> r (UNIT) };"}"""),
-            call(6, "learn", """
+            call(6, "relix_learn", """
                     {"topic":"σ"}"""));
 
     private static final McpJsonMapper JSON = McpJsonDefaults.getMapper();
@@ -130,7 +130,7 @@ public final class LambdaHandler implements RequestStreamHandler {
      * {@code runner}.
      *
      * @param authenticator decides who may call
-     * @param runner        runs the scripts {@code run} is given
+     * @param runner        runs the scripts {@code relix_run} is given
      */
     public LambdaHandler(Authenticator authenticator, ScriptRunner runner) {
         this(authenticator, runner, PATH);
@@ -141,7 +141,7 @@ public final class LambdaHandler implements RequestStreamHandler {
      * {@code runner}, and answering at {@code path}.
      *
      * @param authenticator decides who may call
-     * @param runner        runs the scripts {@code run} is given
+     * @param runner        runs the scripts {@code relix_run} is given
      * @param path          the path the server answers at, such as {@value #PATH}
      */
     public LambdaHandler(Authenticator authenticator, ScriptRunner runner, String path) {
