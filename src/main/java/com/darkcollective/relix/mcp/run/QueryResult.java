@@ -1,8 +1,12 @@
 package com.darkcollective.relix.mcp.run;
 
+import com.darkcollective.relix.ast.SortSpecification;
+import com.darkcollective.relix.embed.Relation;
 import com.darkcollective.relix.embed.Rows;
 import com.darkcollective.relix.embed.Tuple;
 import com.darkcollective.relix.symbol.ColumnDefinition;
+import com.darkcollective.relix.symbol.ScalarType;
+import com.darkcollective.relix.symbol.Type;
 import com.darkcollective.relix.value.BooleanValue;
 import com.darkcollective.relix.value.NumberValue;
 import com.darkcollective.relix.value.Value;
@@ -16,12 +20,18 @@ import java.util.List;
  *
  * @param name      the view the query names, or null for an expression in braces
  * @param columns   the column names, in order; empty when the query failed
+ * @param types     each column's type, in the same order: a scalar as the script spells
+ *                  it ({@code NUMBER}, {@code STRING}, ...), anything else as the engine
+ *                  displays it
+ * @param ordering  the order the rows are guaranteed to come in, one sort key each
+ *                  ({@code spend DESC}); empty when no order is guaranteed
  * @param rows      each row's values, in column order: a number, a boolean, null, or
  *                  the engine's display text for anything else
  * @param truncated whether the result was cut at the row limit
  * @param failure   what stopped the query, or null when it ran
  */
-public record QueryResult(String name, List<String> columns, List<List<Object>> rows,
+public record QueryResult(String name, List<String> columns, List<String> types,
+                          List<String> ordering, List<List<Object>> rows,
                           boolean truncated, String failure) {
 
     /**
@@ -29,12 +39,30 @@ public record QueryResult(String name, List<String> columns, List<List<Object>> 
      */
     public QueryResult {
         columns = List.copyOf(columns);
+        types = List.copyOf(types);
+        ordering = List.copyOf(ordering);
         rows = rows.stream().map(r -> Collections.unmodifiableList(new ArrayList<>(r))).toList();
     }
 
-    static QueryResult of(String name, Rows result) {
+    /**
+     * What a query returned.
+     *
+     * <p>The order is the one the query's physical plan says it
+     * {@linkplain com.darkcollective.relix.plan.PhysicalNode#deliveredOrdering() delivers}:
+     * established by a sort and carried by the operators that keep it, and none otherwise.
+     * Rows that merely happen to arrive sorted are not reported as sorted.
+     *
+     * @param name     the view the query names, or null
+     * @param query    the query that ran
+     * @param result   its rows
+     */
+    static QueryResult of(String name, Relation query, Rows result) {
         List<String> columns = result.schema().columns().stream()
                 .map(ColumnDefinition::name).toList();
+        List<String> types = result.schema().columns().stream()
+                .map(c -> spelling(c.type())).toList();
+        List<String> ordering = query.plan().plan().deliveredOrdering().keys().stream()
+                .map(QueryResult::spelling).toList();
         List<List<Object>> rows = new ArrayList<>();
         for (Tuple tuple : result) {
             List<Object> row = new ArrayList<>(columns.size());
@@ -43,11 +71,24 @@ public record QueryResult(String name, List<String> columns, List<List<Object>> 
             }
             rows.add(row);
         }
-        return new QueryResult(name, columns, rows, result.truncated(), null);
+        return new QueryResult(name, columns, types, ordering, rows, result.truncated(), null);
     }
 
     static QueryResult failed(String name, String failure) {
-        return new QueryResult(name, List.of(), List.of(), false, failure);
+        return new QueryResult(name, List.of(), List.of(), List.of(), List.of(), false, failure);
+    }
+
+    /** A type as a script declares it: {@code STRING}, not the engine's {@code string}. */
+    private static String spelling(Type type) {
+        return type instanceof ScalarType scalar ? scalar.name() : type.display();
+    }
+
+    /**
+     * A sort key as a script writes it, when it is a column. The engine offers no public
+     * way to print an expression key, so one is named for what it is.
+     */
+    private static String spelling(SortSpecification key) {
+        return key.columnName().orElse("an expression") + " " + key.direction().name();
     }
 
     /**

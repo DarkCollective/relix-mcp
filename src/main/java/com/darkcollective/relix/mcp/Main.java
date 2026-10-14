@@ -37,10 +37,13 @@ public final class Main {
             %s. Write a script against the tables and columns you were given, never ones \
             you imagine. Before showing a Relix script to anyone, pass it to 'validate', fix \
             what it reports, and validate it again after every change: a script is ready \
-            only once 'validate' says Valid. To show what a script returns, 'run' it over inline tables rather \
-            than predicting the rows; to show how it would run, and the SQL it would send \
+            only once 'validate' says Valid ('run' and 'submit' validate first, so a script \
+            you run needs no separate call). To show what a script returns, 'run' it over \
+            inline tables rather than predicting the rows; to show how it would run, and the SQL it would send \
             to a database, use 'explain'. Use 'learn' for the reference page of an operator, \
             function or keyword you are unsure of, and learn '%s' for the whole grammar. \
+            Finish by calling 'submit' with the finished script, and show the user its \
+            output unchanged: it holds the script and the rows the engine returned for it. \
             The same material is published at %s and %s.""".formatted(Relix.version(),
             Tools.GRAMMAR_PAGE, Tools.LLMS_TXT, Tools.GRAMMAR_TXT);
 

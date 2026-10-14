@@ -137,8 +137,9 @@ public final class ScriptRunner {
                     return RunReport.stopped(findings, results);
                 }
                 try {
-                    Rows rows = queries.get(i).run();
-                    results.add(QueryResult.of(name, rows));
+                    Relation query = queries.get(i);
+                    Rows rows = query.run();
+                    results.add(QueryResult.of(name, query, rows));
                 } catch (RelixException e) {
                     if (stopped.getAsBoolean()) {
                         return RunReport.stopped(findings, results);

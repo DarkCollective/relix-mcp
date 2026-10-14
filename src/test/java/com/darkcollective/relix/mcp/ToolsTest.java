@@ -1,5 +1,6 @@
 package com.darkcollective.relix.mcp;
 
+import com.darkcollective.relix.docs.RelixDocs;
 import com.darkcollective.relix.mcp.offline.CallerCatalog;
 import com.darkcollective.relix.mcp.offline.ScriptValidator;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
@@ -69,9 +70,9 @@ class ToolsTest {
     }
 
     @Test
-    void theToolsAreValidateExplainRunAndLearn() {
+    void theToolsAreValidateExplainRunSubmitAndLearn() {
         assertThat(tools.all()).extracting(t -> t.tool().name())
-                .containsExactly("validate", "explain", "run", "learn");
+                .containsExactly("validate", "explain", "run", "submit", "learn");
         assertThat(tools.all()).allSatisfy(t ->
                 assertThat(t.tool().annotations().readOnlyHint()).isTrue());
     }
@@ -110,12 +111,59 @@ class ToolsTest {
     void runReturnsTheRowsInTextAndAsData() {
         CallToolResult result = tools.run(call("run", Map.of("script", examples(Tools.PRIMER).getFirst())));
 
-        assertThat(text(result)).startsWith("Query 1:").contains("| 1 | 120 |").contains("(1 row)");
+        assertThat(text(result)).startsWith("Query 1:").contains("| 1 | 120 |")
+                .contains("(1 row, in no guaranteed order)");
         Map<?, ?> data = (Map<?, ?>) result.structuredContent();
         assertThat(data.get("valid")).isEqualTo(true);
         assertThat((List<?>) data.get("results")).singleElement().satisfies(r -> assertThat(
                 ((Map<?, ?>) r).keySet().stream().map(String::valueOf))
-                .containsExactly("name", "columns", "rows", "truncated", "failure"));
+                .containsExactly("name", "columns", "types", "ordering", "rows", "truncated", "failure"));
+    }
+
+    @Test
+    void runSaysThereIsNoNeedToValidateFirst() {
+        assertThat(tools.runTool().tool().description())
+                .contains("There is no need to call 'validate' before 'run'")
+                .contains("in no guaranteed order").contains("'submit'");
+    }
+
+    @Test
+    void submitReturnsTheScriptAndTheEnginesRowsTogether() {
+        String script = examples(Tools.PRIMER).getFirst();
+        CallToolResult result = tools.submit(call("submit", Map.of("script", script)));
+
+        assertThat(result.isError()).isNotEqualTo(Boolean.TRUE);
+        assertThat(text(result)).isEqualTo(Tools.SUBMITTED + "\n\n```relix\n" + script.strip()
+                + "\n```\n\n" + text(tools.run(call("run", Map.of("script", script)))));
+        Map<?, ?> data = (Map<?, ?>) result.structuredContent();
+        assertThat(data.get("submitted")).isEqualTo(true);
+        assertThat(data.get("script")).isEqualTo(script);
+        assertThat((List<?>) data.get("results")).hasSize(1);
+    }
+
+    @Test
+    void aScriptWithBackticksIsFencedLongerThanThem() {
+        String script = "-- ``` is not a fence here\nquery { PROJECT 1 -> one (UNIT) };";
+
+        assertThat(text(tools.submit(call("submit", Map.of("script", script)))))
+                .contains("\n````relix\n" + script + "\n````\n");
+    }
+
+    @Test
+    void anInvalidScriptIsNotSubmitted() {
+        CallToolResult result = tools.submit(call("submit",
+                Map.of("script", "query { SELECT a > 1 (Nowhere) };")));
+
+        assertThat(text(result)).startsWith("Not submitted: fix these").contains("Nowhere")
+                .doesNotContain(Tools.SUBMITTED);
+        assertThat(((Map<?, ?>) result.structuredContent()).get("submitted")).isEqualTo(false);
+        assertThat(tools.submit(call("submit", Map.of())).isError()).isTrue();
+    }
+
+    @Test
+    void theInstructionsSayToFinishWithSubmit() {
+        assertThat(Main.INSTRUCTIONS).contains("Finish by calling 'submit'")
+                .contains("output unchanged");
     }
 
     @Test
@@ -218,6 +266,35 @@ class ToolsTest {
         assertThat(text(tools.learn(call("learn", Map.of("topic", "SELECT"))))).isEqualTo(byGlyph);
         assertThat(text(tools.learn(call("learn", Map.of("topic", "operators/select.md")))))
                 .isEqualTo(byGlyph);
+    }
+
+    @Test
+    void aBriefPageIsItsSyntaxAndOneExample() {
+        String full = text(tools.learn(call("learn", Map.of("topic", "σ"))));
+        String brief = text(tools.learn(call("learn", Map.of("topic", "σ", "detail", "brief"))));
+
+        assertThat(brief).startsWith("# Name:").contains("# Syntax:").contains("# Example:")
+                .contains("σ age >= 18 (Users)").doesNotContain("# Description:")
+                .doesNotContain("Customers in a specific city")
+                .endsWith("without detail 'brief' for the whole page.)");
+        assertThat(brief.length()).isLessThan(full.length() / 4);
+        assertThat(text(tools.learn(call("learn", Map.of("topic", "σ", "detail", "full")))))
+                .isEqualTo(full);
+    }
+
+    @Test
+    void everyPageHasABriefForm() {
+        List<String> pages = new ArrayList<>();
+        RelixDocs.referencePages().forEach(p -> pages.add(p.path()));
+        pages.addAll(List.of("round", "coalesce"));
+        for (String page : pages) {
+            String brief = text(tools.learn(call("learn", Map.of("topic", page, "detail", "brief"))));
+            assertThat(brief).as(page).contains("# Syntax:").contains("# Example:")
+                    .doesNotContain("# Description:");
+            String example = brief.substring(brief.indexOf("# Example:"));
+            assertThat(example.lines()).as(page + ": the example holds code")
+                    .anyMatch(l -> l.startsWith(" ") || l.startsWith("```"));
+        }
     }
 
     @Test

@@ -50,7 +50,53 @@ class ScriptRunnerTest {
                 .startsWith(List.of("CDG", "FRA"))
                 .endsWith(List.of("SIN", "SYD"));
         assertThat(result.truncated()).isFalse();
-        assertThat(report.render()).startsWith("Query 1:\n| origin | dest |");
+        assertThat(report.render()).startsWith("Query 1:\n| origin STRING | dest STRING |");
+    }
+
+    @Test
+    void aSortedResultSaysWhatItIsSortedBy() {
+        RunReport report = runner.run(FLIGHTS + "query { SORT origin, dest DESC (Flights) };");
+
+        assertThat(report.results().getFirst().ordering()).containsExactly("origin ASC", "dest DESC");
+        assertThat(report.render()).endsWith("(6 rows, sorted by origin ASC, dest DESC)");
+    }
+
+    @Test
+    void aResultNothingSortsIsInNoGuaranteedOrder() {
+        RunReport report = runner.run(FLIGHTS + "query { SELECT origin = 'LHR' (Flights) };");
+
+        assertThat(report.results().getFirst().ordering()).isEmpty();
+        assertThat(report.render()).endsWith("(2 rows, in no guaranteed order)");
+    }
+
+    @Test
+    void anOrderAJoinDropsIsNotReported() {
+        RunReport report = runner.run(FLIGHTS + """
+                Hubs := [
+                | origin | hub  |
+                |--------|------|
+                | LHR    | true |
+                | FRA    | true |
+                ];
+                query { (LIMIT 3 (SORT dest (Flights))) JOIN Hubs };
+                """);
+
+        assertThat(report.results().getFirst().ordering()).isEmpty();
+    }
+
+    @Test
+    void eachColumnCarriesTheTypeTheEngineGaveIt() {
+        RunReport report = runner.run("""
+                Events := [
+                | user_id | ts                   |
+                |---------|----------------------|
+                | 1       | 2026-01-01T10:00:00Z |
+                ];
+                query { PROJECT user_id, ts, IIf(user_id > 0, true, false) -> known (Events) };
+                """);
+
+        assertThat(report.results().getFirst().types()).containsExactly("NUMBER", "STRING", "BOOLEAN");
+        assertThat(report.render()).contains("| user_id NUMBER | ts STRING | known BOOLEAN |");
     }
 
     @Test

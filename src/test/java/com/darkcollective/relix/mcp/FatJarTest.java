@@ -140,7 +140,14 @@ class FatJarTest {
     void runCallsAFunctionFromTheLibrary() throws Exception {
         String body = call("run", "{\"script\":\"query { PROJECT Round(2.6) -> r (UNIT) };\"}");
 
-        assertThat(body).contains("| r |").contains("| 3 |");
+        assertThat(body).contains("| r NUMBER |").contains("| 3 |");
+    }
+
+    @Test
+    void submitReturnsTheScriptWithItsRows() throws Exception {
+        String body = call("submit", "{\"script\":\"query { PROJECT Round(2.6) -> r (UNIT) };\"}");
+
+        assertThat(body).contains("Submitted.").contains("| r NUMBER |").contains("| 3 |");
     }
 
     @Test
@@ -157,6 +164,7 @@ class FatJarTest {
     void learnReadsTheBundledPages() throws Exception {
         assertThat(call("learn", "{\"topic\":\"σ\"}")).contains("Selection");
         assertThat(call("learn", "{\"topic\":\"round\"}")).contains("Round");
+        assertThat(call("learn", "{\"topic\":\"σ\",\"detail\":\"brief\"}")).contains("# Example:");
     }
 
     @Test
