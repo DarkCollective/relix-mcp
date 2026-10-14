@@ -36,7 +36,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * and its reference pages by {@code ServiceLoader} and resources, and a jar assembled from
  * forty can lose any of them without failing to compile, start or answer {@code initialize}.
  * So each call here needs one: {@code Round} the function library, {@code OPTIMIZE} the
- * solver, a {@code jdbc} URL the standard connectors and the Postgres dialect, {@code learn}
+ * solver, a {@code jdbc} URL the standard connectors and the Postgres dialect, {@code relix_learn}
  * the bundled pages. Run by
  * {@code fatJarTest}, which builds the jar first.
  */
@@ -139,14 +139,14 @@ class FatJarTest {
 
     @Test
     void runCallsAFunctionFromTheLibrary() throws Exception {
-        String body = call("run", "{\"script\":\"query { PROJECT Round(2.6) -> r (UNIT) };\"}");
+        String body = call("relix_run", "{\"script\":\"query { PROJECT Round(2.6) -> r (UNIT) };\"}");
 
         assertThat(body).contains("| r NUMBER |").contains("| 3 |");
     }
 
     @Test
     void runOptimizesWithTheSolver() throws Exception {
-        String body = call("run", """
+        String body = call("relix_run", """
                 {"script":"Backlog := [\\n\
                 | feature | value | cost |\\n\
                 |---------|-------|------|\\n\
@@ -161,14 +161,14 @@ class FatJarTest {
 
     @Test
     void submitReturnsTheScriptWithItsRows() throws Exception {
-        String body = call("submit", "{\"script\":\"query { PROJECT Round(2.6) -> r (UNIT) };\"}");
+        String body = call("relix_submit", "{\"script\":\"query { PROJECT Round(2.6) -> r (UNIT) };\"}");
 
         assertThat(body).contains("Submitted.").contains("| r NUMBER |").contains("| 3 |");
     }
 
     @Test
     void explainRendersSqlForAPostgresConnection() throws Exception {
-        String body = call("explain", """
+        String body = call("relix_explain", """
                 {"script":"connection wh from jdbc { url: \\"jdbc:postgresql://db.invalid/wh\\" };\\n\
                 query { SELECT amount > 100 (wh.orders) };",
                  "catalog":{"wh":{"orders":{"amount":"NUMBER"}}}}""");
@@ -178,9 +178,9 @@ class FatJarTest {
 
     @Test
     void learnReadsTheBundledPages() throws Exception {
-        assertThat(call("learn", "{\"topic\":\"σ\"}")).contains("Selection");
-        assertThat(call("learn", "{\"topic\":\"round\"}")).contains("Round");
-        assertThat(call("learn", "{\"topic\":\"σ\",\"detail\":\"brief\"}")).contains("# Example:");
+        assertThat(call("relix_learn", "{\"topic\":\"σ\"}")).contains("Selection");
+        assertThat(call("relix_learn", "{\"topic\":\"round\"}")).contains("Round");
+        assertThat(call("relix_learn", "{\"topic\":\"σ\",\"detail\":\"brief\"}")).contains("# Example:");
     }
 
     /**

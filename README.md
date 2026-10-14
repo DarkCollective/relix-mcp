@@ -4,27 +4,27 @@ An [MCP](https://modelcontextprotocol.io) server through which a language model 
 [Relix](https://relix.darkcollective.com) scripts before anyone runs them.
 
 A model with nothing to read invents syntax. Given a checker it can close the loop:
-write a script, `validate` names the problem with its line and column, fix it, and
+write a script, `relix_validate` names the problem with its line and column, fix it, and
 validate again.
 
 ## Tools
 
 | Tool | What it does |
 |---|---|
-| `validate(script, files?, catalog?)` | Checks syntax, every relation and column name, types, and each operator's rules. Nothing the script names is opened: not its files, not its databases, not its HTTP endpoints. |
-| `explain(script, files?, catalog?)` | Shows how the engine would run a script: each rewrite the optimiser applies, the rewritten query, and the physical plan. For a database connection, that includes the exact SQL that would be sent, in the connection's dialect. Like `validate`, it contacts nothing. |
-| `run(script)` | Runs a script whose data is its own (inline tables, views, generators) and returns each query's rows. A model can show real results instead of predicted ones. Each column heading carries its type (`ts STRING`), and each result says whether its order is guaranteed (`sorted by spend DESC`, or `in no guaranteed order`), from the order the physical plan delivers. It validates first, so it needs no `validate` call before it. Files, databases, HTTP sources, connections and imports are refused. `query { relix.columns };` shows the columns and types the engine gave the script's own tables. |
-| `submit(script)` | The model's final answer: runs the script as `run` does and returns the script and its rows together, in a fixed form the model is told to show unchanged. The rows shown are then the engine's, for exactly that script, and a client or an eval can read the answer from the tool call (`structuredContent` has `submitted`, `script` and `results`) whatever the model writes afterwards. |
-| `learn(topic?, detail?)` | The language reference that ships inside the engine: the page for an operator (`σ`, `select`), a statement, or a function (`Round`). With no topic, a list of every page. The whole grammar, as EBNF, is `learn("language/grammar.md")`. With `detail: "brief"`, a page is cut to its syntax and one example, so a conversation does not carry whole pages on every later turn. |
+| `relix_validate(script, files?, catalog?)` | Checks syntax, every relation and column name, types, and each operator's rules. Nothing the script names is opened: not its files, not its databases, not its HTTP endpoints. |
+| `relix_explain(script, files?, catalog?)` | Shows how the engine would run a script: each rewrite the optimiser applies, the rewritten query, and the physical plan. For a database connection, that includes the exact SQL that would be sent, in the connection's dialect. Like `relix_validate`, it contacts nothing. |
+| `relix_run(script)` | Runs a script whose data is its own (inline tables, views, generators) and returns each query's rows. A model can show real results instead of predicted ones. Each column heading carries its type (`ts STRING`), and each result says whether its order is guaranteed (`sorted by spend DESC`, or `in no guaranteed order`), from the order the physical plan delivers. It validates first, so it needs no `relix_validate` call before it. Files, databases, HTTP sources, connections and imports are refused. `query { relix.columns };` shows the columns and types the engine gave the script's own tables. |
+| `relix_submit(script)` | The model's final answer: runs the script as `relix_run` does and returns the script and its rows together, in a fixed form the model is told to show unchanged. The rows shown are then the engine's, for exactly that script, and a client or an eval can read the answer from the tool call (`structuredContent` has `submitted`, `script` and `results`) whatever the model writes afterwards. |
+| `relix_learn(topic?, detail?)` | The language reference that ships inside the engine: the page for an operator (`σ`, `select`), a statement, or a function (`Round`). With no topic, a list of every page. The whole grammar, as EBNF, is `relix_learn("language/grammar.md")`. With `detail: "brief"`, a page is cut to its syntax and one example, so a conversation does not carry whole pages on every later turn. |
 
-### What `validate` and `explain` need from the caller
+### What `relix_validate` and `relix_explain` need from the caller
 
 It never reaches anything a script names, so what the engine would otherwise learn by
 looking, the caller says:
 
 - **Sources declare their columns.** A `source … from csv(…) { schema: { … } }` or an
   HTTP source with a `schema:` block is checked against that schema. A JSON file source,
-  or an HTTP source without one, accepts any column name; `validate` warns about each
+  or an HTTP source without one, accepts any column name; `relix_validate` warns about each
   such source rather than implying a check it did not make.
 - **Database tables are described in `catalog`.** A script that reads `wh.orders`
   through `connection wh from jdbc { … }` is checked against the columns the caller
@@ -40,9 +40,9 @@ looking, the caller says:
 - **Imported files are sent in `files`**, keyed by the path the `import` statement
   writes: `{ "lib/common.relix": "…" }`.
 
-### What `run` allows
+### What `relix_run` allows
 
-`run` executes in a closed `Sandbox` that permits no external declarations. A sandbox
+`relix_run` executes in a closed `Sandbox` that permits no external declarations. A sandbox
 always accepts what reads nothing outside the session, so a script can compute over the
 data it writes out and can reach nothing else. The sandbox's limits bound each call: at
 most 200 rows per query (a longer result is cut, and says so), 10 seconds per query, and
@@ -185,7 +185,7 @@ The parts worth reading as examples:
 - [`ScriptValidator`](src/main/java/com/darkcollective/relix/mcp/offline/ScriptValidator.java):
   `Relix.validate`, with its diagnostics turned into placed findings.
 - [`ScriptExplainer`](src/main/java/com/darkcollective/relix/mcp/offline/ScriptExplainer.java):
-  `render()`, `optimized()`, `rewrites()` and `explain()`, the inspection terminals, none
+  `render()`, `optimized()`, `rewrites()` and `relix_explain()`, the inspection terminals, none
   of which reads a row.
 - [`CallerCatalog`](src/main/java/com/darkcollective/relix/mcp/offline/CallerCatalog.java):
   a `CatalogProvider` built from a description rather than a database.

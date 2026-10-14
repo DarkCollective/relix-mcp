@@ -19,7 +19,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class DeadlineTest {
 
-    /** {@code run} with no limit of the sandbox's own to reach before the deadline. */
+    /** {@code relix_run} with no limit of the sandbox's own to reach before the deadline. */
     private final Tools tools = new Tools(new ScriptRunner(Sandbox.builder().build()));
 
     @Test
@@ -106,7 +106,7 @@ class DeadlineTest {
     }
 
     private static CallToolRequest run(String script) {
-        return CallToolRequest.builder("run").arguments(Map.of("script", script)).build();
+        return CallToolRequest.builder("relix_run").arguments(Map.of("script", script)).build();
     }
 
     private static String text(CallToolResult result) {

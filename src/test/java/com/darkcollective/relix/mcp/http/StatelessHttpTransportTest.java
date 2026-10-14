@@ -38,16 +38,16 @@ class StatelessHttpTransportTest {
         assertThat(server.get("name")).isEqualTo("relix");
         assertThat(server.get("title")).isEqualTo("Relix (engine " + Relix.version() + ")");
         assertThat(server.get("version")).isEqualTo(System.getProperty("relix.mcp.version"));
-        assertThat((String) result.get("instructions")).contains("validate");
+        assertThat((String) result.get("instructions")).contains("relix_validate");
     }
 
     @Test
     void everyToolIsListedAndCallable() throws IOException {
         Map<?, ?> listed = (Map<?, ?>) read(post(request(2, "tools/list", Map.of()))).get("result");
         assertThat((List<?>) listed.get("tools")).extracting(t -> String.valueOf(((Map<?, ?>) t).get("name")))
-                .containsExactly("validate", "explain", "run", "submit", "learn");
+                .containsExactly("relix_validate", "relix_explain", "relix_run", "relix_submit", "relix_learn");
 
-        Map<?, ?> called = read(post(request(3, "tools/call", Map.of("name", "run",
+        Map<?, ?> called = read(post(request(3, "tools/call", Map.of("name", "relix_run",
                 "arguments", Map.of("script", "query { PROJECT Round(2.5) -> r (UNIT) };")))));
 
         assertThat(called.get("id")).isEqualTo(3);
