@@ -183,6 +183,37 @@ class FatJarTest {
         assertThat(call("learn", "{\"topic\":\"σ\",\"detail\":\"brief\"}")).contains("# Example:");
     }
 
+    /**
+     * A name repeated in a zip shows a reader only one of its entries, so a license or a
+     * provider list stored twice is, for any reader, stored once and lost once.
+     */
+    @Test
+    void noEntryIsStoredTwice() throws Exception {
+        try (ZipFile jar = new ZipFile(System.getProperty("relix.mcp.fatJar"))) {
+            List<String> names = Collections.list(jar.entries()).stream().map(ZipEntry::getName).toList();
+            assertThat(names).doesNotHaveDuplicates();
+        }
+    }
+
+    /** Libraries under different licenses share each name: each one's text is kept. */
+    @Test
+    void theLicensesOfEveryBundledLibraryAreKept() throws Exception {
+        try (ZipFile jar = new ZipFile(System.getProperty("relix.mcp.fatJar"))) {
+            // SLF4J's MIT licence beside Relix's Apache 2.0, and both projects' notices.
+            assertThat(text(jar, "META-INF/LICENSE.txt")).contains("QOS.ch").contains("Apache License");
+            assertThat(text(jar, "META-INF/LICENSE")).contains("Apache License");
+            assertThat(text(jar, "META-INF/NOTICE")).contains("Jackson").contains("Darkcollective");
+        }
+    }
+
+    private static String text(ZipFile jar, String name) throws Exception {
+        ZipEntry entry = jar.getEntry(name);
+        assertThat(entry).as(name).isNotNull();
+        try (InputStream in = jar.getInputStream(entry)) {
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        }
+    }
+
     @Test
     void lambdaCanLoadTheHandler() throws Exception {
         try (ZipFile jar = new ZipFile(System.getProperty("relix.mcp.fatJar"))) {
