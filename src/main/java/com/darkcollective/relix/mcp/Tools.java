@@ -25,8 +25,8 @@ import java.util.function.BooleanSupplier;
 import java.util.stream.Collectors;
 
 /**
- * The server's tools: {@code validate}, {@code explain}, {@code run}, {@code submit} and
- * {@code learn}.
+ * The server's tools: {@code relix_validate}, {@code relix_explain}, {@code relix_run}, {@code relix_submit} and
+ * {@code relix_learn}.
  *
  * <p>Each is a plain function from arguments to a result, so it is the same whichever
  * transport carries it, and a test calls it without one.
@@ -110,8 +110,8 @@ final class Tools {
             coverage (COVER), sessions (SESSIONIZE), time-series downsampling (DOWNSAMPLE), \
             as-of joins (ASOF), top rows per group (TOP), sampling (SAMPLE), clustering \
             (CLUSTER) and record linkage. Before writing anything, describe the task to \
-            'learn': it searches every page, and Relix may have an operator for it. Never \
-            hard-code a result computed elsewhere into a script: 'run' would show those rows \
+            'relix_learn': it searches every page, and Relix may have an operator for it. Never \
+            hard-code a result computed elsewhere into a script: 'relix_run' would show those rows \
             as if the engine had found them.
             """;
 
@@ -126,18 +126,18 @@ final class Tools {
             'catalog' as {"conn": {"table": {"column": "TYPE"}}}; a table not described \
             there is reported as unknown. Send the text of each imported file in 'files'.
 
-            To see the SQL a script would send to a database, use 'explain'. To see what \
-            a script returns, use 'run' with its data as inline tables. Use \
-            'learn' for the reference page of any operator, function or keyword.
+            To see the SQL a script would send to a database, use 'relix_explain'. To see what \
+            a script returns, use 'relix_run' with its data as inline tables. Use \
+            'relix_learn' for the reference page of any operator, function or keyword.
 
             """ + PRIMER;
 
     /**
-     * What an invalid verdict ends with. A model that has called {@code validate} once tends
+     * What an invalid verdict ends with. A model that has called {@code relix_validate} once tends
      * to treat the call as the check, show its fix unchecked, and so show the same error
      * again; saying so where the error is read is what reaches it.
      */
-    static final String REVALIDATE = "Fix these, then call 'validate' again on the fixed "
+    static final String REVALIDATE = "Fix these, then call 'relix_validate' again on the fixed "
             + "script: it is ready to show only once this says Valid.";
 
     private static final String EXPLAIN_DESCRIPTION = """
@@ -149,12 +149,12 @@ final class Tools {
             For a database connection, the plan shows what is pushed to the database and \
             the exact SQL it would be sent, in the dialect the connection's URL names \
             (jdbc:postgresql:, jdbc:mysql:, ...). Nothing is contacted, so describe the \
-            tables in 'catalog' as for 'validate'. The script is validated first, and an \
+            tables in 'catalog' as for 'relix_validate'. The script is validated first, and an \
             invalid one returns its errors.""";
 
     /**
      * The reference page holding the whole language as EBNF. It ships in the engine jar, so
-     * {@code learn} serves the grammar of exactly the engine this server runs.
+     * {@code relix_learn} serves the grammar of exactly the engine this server runs.
      */
     static final String GRAMMAR_PAGE = "language/grammar.md";
 
@@ -162,26 +162,34 @@ final class Tools {
      * Where the site publishes the language's primer and grammar as plain text, for a
      * reader who can fetch a URL. They describe the site's current release, which is the
      * hosted server's engine but may not be a local install's, so the tools point at
-     * {@code learn} for anything a script depends on and at these for further reading.
+     * {@code relix_learn} for anything a script depends on and at these for further reading.
      */
     static final String SITE = "https://relix.darkcollective.com";
     static final String LLMS_TXT = SITE + "/llms.txt";
     static final String GRAMMAR_TXT = SITE + "/reference/language/grammar.ebnf.txt";
 
     /**
-     * The query the {@code run} description offers for looking at a script's own
+     * The query the {@code relix_run} description offers for looking at a script's own
      * relations. {@code ToolsTest} runs it inside the sandbox, under the primer's table.
      */
     static final String CATALOG_QUERY = "query { relix.columns };";
 
-    private static final String RUN_DESCRIPTION = """
+    /**
+     * What {@code relix_run}'s and {@code relix_submit}'s descriptions begin with. A tool that
+     * runs a {@code script} is, to a model, a tool that executes code, and a small model
+     * reads the name before the description; so the first thing it reads says what the
+     * tool will not run.
+     */
+    static final String RELIX_ONLY = "Relix only: this does not run Python, shell or SQL.";
+
+    private static final String RUN_DESCRIPTION = RELIX_ONLY + " " + """
             Runs a Relix script and returns the rows each query statement produces, as a \
             table. Use it to show real results instead of predicting them.
 
             The script's data must be its own: inline tables, views, and generators. Any \
             file, database or HTTP source, connection, or import is refused, so to run a \
             query meant for real data, write a few representative rows as an inline table. \
-            Each query %s and %s. There is no need to call 'validate' before 'run': run \
+            Each query %s and %s. There is no need to call 'relix_validate' before 'relix_run': it \
             validates the script first, and an invalid one returns its errors without \
             running.
 
@@ -191,16 +199,16 @@ final class Tools {
             no guaranteed order', when rows that look sorted may come back otherwise. Sort \
             the result whose order matters, after any join.
 
-            When the script is finished, call 'submit' with it instead of showing it \
+            When the script is finished, call 'relix_submit' with it instead of showing it \
             yourself.
 
             The engine describes a script's own relations, as relations: %s lists each \
             column with the type the engine gave it, and relix.relations lists the \
             relations with their row counts.""";
 
-    private static final String SUBMIT_DESCRIPTION = """
+    private static final String SUBMIT_DESCRIPTION = RELIX_ONLY + " " + """
             Submits your finished Relix script as the answer. It validates and runs the \
-            script exactly as 'run' does, under the same rules, and returns the script \
+            script exactly as 'relix_run' does, under the same rules, and returns the script \
             together with the rows the engine produced for it, in a fixed form.
 
             Show the user that output unchanged, as your answer: do not retype the script \
@@ -218,16 +226,16 @@ final class Tools {
     private final Reference reference = new Reference();
 
     /**
-     * The tools, {@code run} with the {@linkplain ScriptRunner#DEFAULT_SANDBOX default limits}.
+     * The tools, {@code relix_run} with the {@linkplain ScriptRunner#DEFAULT_SANDBOX default limits}.
      */
     Tools() {
         this(new ScriptRunner());
     }
 
     /**
-     * The tools, {@code run} with {@code runner}'s limits.
+     * The tools, {@code relix_run} with {@code runner}'s limits.
      *
-     * @param runner runs the scripts {@code run} is given
+     * @param runner runs the scripts {@code relix_run} is given
      */
     Tools(ScriptRunner runner) {
         this.runner = runner;
@@ -268,7 +276,7 @@ final class Tools {
     }
 
     Definition validateTool() {
-        Tool tool = Tool.builder("validate", offlineSchema("the Relix script to check"))
+        Tool tool = Tool.builder("relix_validate", offlineSchema("the Relix script to check"))
                 .title("Validate a Relix script")
                 .description(VALIDATE_DESCRIPTION)
                 .annotations(readOnly("Validate a Relix script"))
@@ -277,7 +285,7 @@ final class Tools {
     }
 
     Definition explainTool() {
-        Tool tool = Tool.builder("explain", offlineSchema("the Relix script to explain"))
+        Tool tool = Tool.builder("relix_explain", offlineSchema("the Relix script to explain"))
                 .title("Explain how a Relix script would run")
                 .description(EXPLAIN_DESCRIPTION)
                 .annotations(readOnly("Explain how a Relix script would run"))
@@ -291,7 +299,7 @@ final class Tools {
                 "properties", Map.of("script", Map.of("type", "string",
                         "description", "the Relix script to run; its data must be inline tables")),
                 "required", List.of("script"));
-        Tool tool = Tool.builder("run", schema)
+        Tool tool = Tool.builder("relix_run", schema)
                 .title("Run a Relix script over its own data")
                 .description(runDescription())
                 .annotations(readOnly("Run a Relix script over its own data"))
@@ -305,7 +313,7 @@ final class Tools {
                 "properties", Map.of("script", Map.of("type", "string",
                         "description", "the finished Relix script; its data must be inline tables")),
                 "required", List.of("script"));
-        Tool tool = Tool.builder("submit", schema)
+        Tool tool = Tool.builder("relix_submit", schema)
                 .title("Submit a finished Relix script with its results")
                 .description(SUBMIT_DESCRIPTION)
                 .annotations(readOnly("Submit a finished Relix script with its results"))
@@ -314,7 +322,7 @@ final class Tools {
     }
 
     /**
-     * The description of {@code run}, with the limits of the sandbox it runs in.
+     * The description of {@code relix_run}, with the limits of the sandbox it runs in.
      */
     String runDescription() {
         var sandbox = runner.sandbox();
@@ -329,7 +337,7 @@ final class Tools {
     }
 
     /**
-     * The description of {@code learn}, naming the operators SQL has no word for.
+     * The description of {@code relix_learn}, naming the operators SQL has no word for.
      *
      * <p>A model that does not know an operator exists will not ask for it; it writes
      * the algorithm in another language instead. So the description says what exists,
@@ -341,7 +349,7 @@ final class Tools {
                 Reads the Relix language reference that ships with the engine. Ask for a \
                 page by name (an operator glyph like σ, a keyword like SELECT or ROLLING, a \
                 function like Round, or a page path), or describe what you want to do, in \
-                your own words, and learn searches every page for it. With no topic, lists \
+                your own words, and relix_learn searches every page for it. With no topic, lists \
                 every page. The whole grammar, as EBNF, is the page '%s'.
 
                 Pages are long, and each one read stays in the conversation. With detail \
@@ -370,7 +378,7 @@ final class Tools {
                         "detail", Map.of("type", "string", "enum", List.of(FULL, BRIEF),
                                 "description", "'full' (the default) for the whole page, "
                                         + "'brief' for its syntax and one example")));
-        Tool tool = Tool.builder("learn", schema)
+        Tool tool = Tool.builder("relix_learn", schema)
                 .title("Read the Relix reference")
                 .description(learnDescription())
                 .annotations(readOnly("Read the Relix reference"))
@@ -378,7 +386,7 @@ final class Tools {
         return new Definition(tool, (request, stopped) -> learn(request));
     }
 
-    /** The two lengths {@code learn} serves a page at. */
+    /** The two lengths {@code relix_learn} serves a page at. */
     static final String FULL = "full";
     static final String BRIEF = "brief";
 
@@ -435,7 +443,8 @@ final class Tools {
             return NOTHING_FINISHED;
         }
         return CallToolResult.builder()
-                .addTextContent(report.valid() ? report.render() : report.render() + "\n" + REVALIDATE)
+                .addTextContent(report.valid() ? report.render()
+                        : ForeignCode.lead(asked.script(), report.render() + "\n" + REVALIDATE))
                 .structuredContent(Map.of("valid", report.valid(), "findings",
                         report.findings().stream().map(Tools::asData).toList()))
                 .build();
@@ -459,7 +468,8 @@ final class Tools {
         data.put("findings", report.findings().stream().map(Tools::asData).toList());
         data.put("queries", report.queries().stream().map(Tools::asData).toList());
         return CallToolResult.builder()
-                .addTextContent(report.render())
+                .addTextContent(report.valid() ? report.render()
+                        : ForeignCode.lead(asked.script(), report.render()))
                 .structuredContent(data)
                 .build();
     }
@@ -478,7 +488,8 @@ final class Tools {
             return NOTHING_FINISHED;
         }
         return CallToolResult.builder()
-                .addTextContent(report.render())
+                .addTextContent(report.valid() ? report.render()
+                        : ForeignCode.lead(text, report.render()))
                 .structuredContent(asData(report))
                 .build();
     }
@@ -515,9 +526,12 @@ final class Tools {
                 ? SUBMITTED + "\n\n" + fenced(text) + "\n\n" + report.render()
                 : "Not submitted: " + (report.valid()
                         ? "the run was stopped before every query finished. Make the script "
-                                + "cheaper, then call 'submit' again."
-                        : "fix these, then call 'submit' again on the fixed script.")
+                                + "cheaper, then call 'relix_submit' again."
+                        : "fix these, then call 'relix_submit' again on the fixed script.")
                         + "\n\n" + report.render();
+        if (!report.valid()) {
+            answer = ForeignCode.lead(text, answer);
+        }
         return CallToolResult.builder()
                 .addTextContent(answer)
                 .structuredContent(data)
