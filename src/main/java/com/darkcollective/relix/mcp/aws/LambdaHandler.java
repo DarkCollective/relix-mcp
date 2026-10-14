@@ -51,6 +51,12 @@ import java.util.function.Supplier;
  *       {@code 0} leaves only the deadline on the whole call. Unset, it is
  *       {@link ScriptRunner#DEFAULT_QUERY_TIMEOUT}.</li>
  * </ul>
+ *
+ * <p>Under SnapStart, Lambda constructs the handler once, when a version is published, and
+ * starts every instance from a snapshot taken after it. So there the constructor also
+ * {@linkplain #warm() calls each tool once}, and the snapshot holds an engine that has
+ * loaded its classes, found its providers and read its pages. The API key is read then too,
+ * and travels in the snapshot: a new key takes effect when a new version is published.
  */
 public final class LambdaHandler implements RequestStreamHandler {
 
@@ -68,6 +74,33 @@ public final class LambdaHandler implements RequestStreamHandler {
 
     /** The variable giving one query's time limit, in seconds. */
     public static final String QUERY_TIMEOUT = "RELIX_MCP_QUERY_TIMEOUT_SECONDS";
+
+    /** The variable in which Lambda says how the function is being started. */
+    static final String INITIALIZATION_TYPE = "AWS_LAMBDA_INITIALIZATION_TYPE";
+
+    /**
+     * One call to each tool, each needing a different part of the engine: the function
+     * library, the solver, the connectors and the Postgres dialect, the reference pages.
+     */
+    static final List<String> WARM_UP = List.of(
+            """
+            {"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+             "protocolVersion":"2025-06-18","capabilities":{},
+             "clientInfo":{"name":"warm-up","version":"1"}}}""",
+            call(2, "validate", """
+                    {"script":"query { PROJECT Round(2.6) -> r (UNIT) };"}"""),
+            call(3, "explain", """
+                    {"script":"connection wh from jdbc { url: \\"jdbc:postgresql://db.invalid/wh\\" };\\n\
+                    query { SELECT amount > 100 (wh.orders) };",
+                     "catalog":{"wh":{"orders":{"amount":"NUMBER"}}}}"""),
+            call(4, "run", """
+                    {"script":"Backlog := [\\n| feature | value | cost |\\n|---|---|---|\\n\
+                    | A | 60 | 10 |\\n| B | 100 | 20 |\\n];\\n\
+                    query { OPTIMIZE MAXIMIZE SUM(value) SUBJECT TO SUM(cost) <= 20 (Backlog) };"}"""),
+            call(5, "submit", """
+                    {"script":"query { PROJECT Round(2.6) -> r (UNIT) };"}"""),
+            call(6, "learn", """
+                    {"topic":"σ"}"""));
 
     private static final McpJsonMapper JSON = McpJsonDefaults.getMapper();
 
@@ -87,6 +120,9 @@ public final class LambdaHandler implements RequestStreamHandler {
     LambdaHandler(Map<String, String> env) {
         this(new ApiKeyAuthenticator(apiKey(env, () -> ParametersAndSecrets.of(env, JSON))),
                 new ScriptRunner(ScriptRunner.sandbox(queryTimeout(env))), path(env));
+        if ("snap-start".equals(env.get(INITIALIZATION_TYPE))) {
+            warm();
+        }
     }
 
     /**
@@ -132,6 +168,34 @@ public final class LambdaHandler implements RequestStreamHandler {
         }
         answer.put("isBase64Encoded", false);
         output.write(JSON.writeValueAsString(answer).getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * Calls each tool once, as a client would but past the key, so that what the engine
+     * loads on first use is loaded now. A call the server cannot answer, or a script it
+     * finds invalid or cannot plan or run, fails the warm-up, and with it the version's
+     * publication, rather than every request that version would serve.
+     */
+    void warm() {
+        Map<String, List<String>> headers = Map.of(
+                "Accept", List.of("application/json, text/event-stream"),
+                "Content-Type", List.of("application/json"));
+        for (String message : WARM_UP) {
+            Response response = transport.handle("POST", headers, message,
+                    Deadline.within(Duration.ofSeconds(60)).context());
+            String body = response.body();
+            if (response.status() != 200 || body == null || body.contains("\"isError\":true")
+                    || body.contains("\"valid\":false") || body.contains("Could not be planned: ")
+                    || body.contains("Failed: ")) {
+                throw new IllegalStateException("the warm-up call " + message
+                        + " was answered " + response.status() + ": " + body);
+            }
+        }
+    }
+
+    private static String call(int id, String tool, String arguments) {
+        return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"method\":\"tools/call\","
+                + "\"params\":{\"name\":\"" + tool + "\",\"arguments\":" + arguments + "}}";
     }
 
     /**

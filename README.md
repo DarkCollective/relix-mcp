@@ -154,6 +154,21 @@ answers without what it was doing. One query may also run for
 call). Prefer a Function URL to an API Gateway HTTP API, which caps an integration at
 about 30 seconds whatever the function allows.
 
+**SnapStart.** With SnapStart on, Lambda starts the function once, when a version is
+published, and every instance from a snapshot of it, so a cold start skips the JVM's
+start and the engine's first use. Under SnapStart the handler calls each tool once before
+the snapshot is taken, and a version whose warm-up fails is not published. To use it:
+
+- set SnapStart to apply on published versions; it never applies to `$LATEST`;
+- deploy by updating the code, publishing a version, and pointing an alias at it;
+- put the Function URL on the alias, not on the function. That URL has a new host, so a
+  CDN in front of it needs its origin changed.
+
+The API key is read when the snapshot is taken and travels in it, so a new key takes
+effect when a new version is published. SnapStart sets no `AWS_SESSION_TOKEN`; the
+handler takes the session token the Parameters and Secrets extension wants from the
+container credentials endpoint instead.
+
 ## Built on the published engine, and nothing else
 
 This server is also an example of embedding Relix, so it uses nothing a program outside
