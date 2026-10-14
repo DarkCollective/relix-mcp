@@ -101,6 +101,100 @@ final class Reference {
     }
 
     /**
+     * A page cut to what writing a script from it needs first: its name, its syntax, and
+     * its first example.
+     *
+     * <p>Every page, language and function alike, follows the reference's published
+     * template ({@code docs/reference/.template.md} in relix-docs), whose sections are
+     * top-level headings: {@code # Name:}, {@code # Syntax:}, {@code # Examples:} and so on.
+     * An example is a {@code ##} sub-heading and what follows it, or else the paragraphs up
+     * to and including the first that holds code, indented or fenced. A page
+     * without a syntax section is returned whole.
+     *
+     * @param markdown a page, as {@link #page(String)} returns it
+     * @return the brief page
+     */
+    static String brief(String markdown) {
+        List<String> lines = markdown.lines().toList();
+        List<String> syntax = section(lines, "# Syntax:");
+        if (syntax.isEmpty()) {
+            return markdown;
+        }
+        StringBuilder out = new StringBuilder();
+        lines.stream().filter(l -> l.startsWith("# Name:")).findFirst()
+                .ifPresent(name -> out.append(name).append("\n\n"));
+        syntax.forEach(line -> out.append(line).append('\n'));
+        List<String> example = firstExample(section(lines, "# Examples:"));
+        if (!example.isEmpty()) {
+            out.append("\n# Example:\n");
+            example.forEach(line -> out.append(line).append('\n'));
+        }
+        return out.toString().strip();
+    }
+
+    /**
+     * The lines of the section a top-level heading opens, the heading included and blank
+     * lines at either end left out; empty when the page has no such heading. A {@code #}
+     * inside a fenced code block is not a heading.
+     */
+    private static List<String> section(List<String> lines, String heading) {
+        List<String> section = new ArrayList<>();
+        boolean inside = false;
+        boolean fenced = false;
+        for (String line : lines) {
+            if (!fenced && line.startsWith("# ")) {
+                if (inside) {
+                    break;
+                }
+                inside = line.strip().equals(heading);
+            }
+            if (line.strip().startsWith("```")) {
+                fenced = !fenced;
+            }
+            if (inside) {
+                section.add(line);
+            }
+        }
+        return trimBlank(section);
+    }
+
+    /** The first example of an examples section, without its heading. */
+    private static List<String> firstExample(List<String> section) {
+        List<String> body = trimBlank(section.isEmpty() ? section : section.subList(1, section.size()));
+        List<String> example = new ArrayList<>();
+        boolean subheaded = !body.isEmpty() && body.getFirst().startsWith("## ");
+        boolean fenced = false;
+        boolean code = false;
+        for (String line : body) {
+            // A paragraph ends the example once the example holds code: a sentence that
+            // introduces its code a blank line before it is not an example on its own.
+            boolean boundary = subheaded ? line.startsWith("## ") && !example.isEmpty()
+                    : line.isBlank() && code;
+            if (!fenced && boundary) {
+                break;
+            }
+            if (line.strip().startsWith("```")) {
+                fenced = !fenced;
+            }
+            code |= fenced || line.startsWith(" ") || line.startsWith("\t");
+            example.add(line);
+        }
+        return trimBlank(example);
+    }
+
+    private static List<String> trimBlank(List<String> lines) {
+        int from = 0;
+        int to = lines.size();
+        while (from < to && lines.get(from).isBlank()) {
+            from++;
+        }
+        while (to > from && lines.get(to - 1).isBlank()) {
+            to--;
+        }
+        return lines.subList(from, to);
+    }
+
+    /**
      * One page a search found.
      *
      * @param title   the page's title, or the function's name

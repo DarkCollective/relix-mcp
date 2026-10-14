@@ -65,7 +65,9 @@ public record RunReport(boolean valid, List<Finding> findings, List<QueryResult>
             }
             out.append(table(result));
             int n = result.rows().size();
-            out.append('(').append(n).append(n == 1 ? " row" : " rows");
+            out.append('(').append(n).append(n == 1 ? " row" : " rows").append(", ")
+                    .append(result.ordering().isEmpty() ? "in no guaranteed order"
+                            : "sorted by " + String.join(", ", result.ordering()));
             if (result.truncated()) {
                 out.append("; cut at the row limit, so there are more");
             }
@@ -79,9 +81,18 @@ public record RunReport(boolean valid, List<Finding> findings, List<QueryResult>
         return out.toString().stripTrailing();
     }
 
+    /**
+     * A result as a markdown table. Each heading carries the column's type: a model that
+     * cannot see that an inline column is a STRING writes arithmetic on it as if it were
+     * a timestamp.
+     */
     private static String table(QueryResult result) {
-        StringBuilder out = new StringBuilder();
-        out.append("| ").append(String.join(" | ", result.columns())).append(" |\n");
+        StringBuilder out = new StringBuilder("|");
+        for (int i = 0; i < result.columns().size(); i++) {
+            out.append(' ').append(result.columns().get(i)).append(' ')
+                    .append(result.types().get(i)).append(" |");
+        }
+        out.append('\n');
         out.append(result.columns().stream().map(c -> "---")
                 .collect(Collectors.joining("|", "|", "|"))).append('\n');
         for (List<Object> row : result.rows()) {

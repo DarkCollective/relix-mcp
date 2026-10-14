@@ -47,7 +47,7 @@ class LambdaHandlerTest {
         Map<?, ?> result = (Map<?, ?>) JSON.readValue((String) answer.get("body"), Map.class)
                 .get("result");
         assertThat(result.get("isError")).isNotEqualTo(true);
-        assertThat(result.toString()).contains("| r |");
+        assertThat(result.toString()).contains("| r NUMBER |");
     }
 
     @Test
