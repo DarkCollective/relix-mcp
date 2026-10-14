@@ -100,7 +100,7 @@ serves it with the JDK's own, and a serverless handler calls the same function.
 
 ```bash
 ./gradlew shadowJar
-java -jar build/libs/relix-mcp-1.0.0-SNAPSHOT-all.jar --http
+java -jar build/libs/relix-mcp-0.1.0-all.jar --http
 ```
 
 The server, the engine and the SDK in one jar, which is what a function platform
