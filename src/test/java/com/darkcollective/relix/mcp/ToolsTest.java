@@ -74,6 +74,47 @@ class ToolsTest {
         }
     }
 
+    /**
+     * The primer's SELECT, PROJECT and GROUP lines, held to the engine. A model expecting SQL
+     * reads a column list beside SELECT as SELECT's, so each sits on its own line, and the
+     * claim that an aggregate works only inside GROUP is a claim about what the engine
+     * refuses.
+     */
+    @Test
+    void theSelectProjectAndGroupLinesSayWhatTheEngineDoes() {
+        String table = """
+                R := [
+                | k | x | a | b |
+                |---|---|---|---|
+                | p | 1 | 4 | 2 |
+                | p | 2 | 3 | 1 |
+                ];
+                """;
+        List<String> forms = List.of("SELECT x > 1 (R)", "PROJECT a, b * 2 -> c (R)",
+                "GROUP k, SUM(x) -> total, COUNT(*) -> n (R)", "GROUP SUM(x) -> total (R)");
+        assertThat(Tools.PRIMER).contains("It is a filter, not SQL's SELECT.")
+                .contains("this is SQL's SELECT list").contains(forms.subList(1, 4));
+        assertThat(Tools.PRIMER.lines()).anySatisfy(line -> assertThat(line).startsWith("SELECT cond (R)"))
+                .anySatisfy(line -> assertThat(line).startsWith("PROJECT a, b * 2 -> c (R)"))
+                .anySatisfy(line -> assertThat(line).startsWith("GROUP k, SUM(x)"));
+
+        for (String form : forms) {
+            assertThat(new ScriptValidator().validate(table + "query { " + form + " };",
+                    Map.of(), CallerCatalog.empty()).render()).as(form).isEqualTo("Valid.");
+        }
+
+        CallToolResult whole = tools.run(call("relix_run",
+                Map.of("script", table + "query { GROUP SUM(x) -> total (R) };")));
+        assertThat(text(whole)).contains("| 3 |").contains("(1 row");
+
+        for (String aggregate : List.of("SUM(x)", "COUNT(*)", "AVG(x)", "MIN(x)", "MAX(x)")) {
+            assertThat(new ScriptValidator().validate(table + "query { GROUP " + aggregate + " -> v (R) };",
+                    Map.of(), CallerCatalog.empty()).render()).as(aggregate).isEqualTo("Valid.");
+            assertThat(new ScriptValidator().validate(table + "query { PROJECT " + aggregate + " -> v (R) };",
+                    Map.of(), CallerCatalog.empty()).render()).as(aggregate).isNotEqualTo("Valid.");
+        }
+    }
+
     @Test
     void theToolsAreNamedAfterTheLanguage() {
         assertThat(tools.all()).extracting(t -> t.tool().name())
