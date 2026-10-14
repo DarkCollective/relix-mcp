@@ -20,6 +20,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
 
@@ -48,6 +49,26 @@ class LambdaHandlerTest {
                 .get("result");
         assertThat(result.get("isError")).isNotEqualTo(true);
         assertThat(result.toString()).contains("| r NUMBER |");
+    }
+
+    @Test
+    void theWarmUpIsAnsweredWithoutError() {
+        handler.warm();
+    }
+
+    /** A tool the warm-up leaves out would load what it needs on a user's first call. */
+    @Test
+    void theWarmUpCallsEveryTool() throws IOException {
+        Map<?, ?> answer = invoke(event(KEY,
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}"), Duration.ofSeconds(30));
+        List<?> tools = (List<?>) ((Map<?, ?>) JSON.readValue((String) answer.get("body"), Map.class)
+                .get("result")).get("tools");
+
+        assertThat(tools).isNotEmpty().allSatisfy(tool -> {
+            String name = (String) ((Map<?, ?>) tool).get("name");
+            assertThat(LambdaHandler.WARM_UP).as(name).anySatisfy(message ->
+                    assertThat(message).contains("\"name\":\"" + name + "\""));
+        });
     }
 
     @Test

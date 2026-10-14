@@ -36,6 +36,11 @@ class ParametersAndSecretsTest {
                 case "/systemsmanager/parameters/get" ->
                         "{\"Parameter\":{\"Name\":\"/relix/key\",\"Type\":\"SecureString\",\"Value\":\"from-ssm\"}}";
                 case "/secretsmanager/get" -> "{\"Name\":\"relix\",\"SecretString\":\"from-secrets\\n\"}";
+                case "/2021-04-23/credentials" -> "container-auth".equals(
+                        exchange.getRequestHeaders().getFirst("Authorization"))
+                        ? "{\"AccessKeyId\":\"AKID\",\"SecretAccessKey\":\"secret\","
+                        + "\"Token\":\"from-container\",\"Expiration\":\"2026-10-14T12:00:00Z\"}"
+                        : null;
                 default -> null;
             };
             byte[] bytes = (body == null ? "not found" : body).getBytes(StandardCharsets.UTF_8);
@@ -65,6 +70,36 @@ class ParametersAndSecretsTest {
     void aSecretIsReadAndTrimmed() {
         assertThat(LambdaHandler.apiKey(Map.of(LambdaHandler.KEY_SECRET, "relix"), () -> store))
                 .isEqualTo("from-secrets");
+    }
+
+    @Test
+    void theSessionTokenIsTheEnvironmentsWhenLambdaSetsOne() {
+        assertThat(ParametersAndSecrets.sessionToken(Map.of("AWS_SESSION_TOKEN", "from-env",
+                "AWS_CONTAINER_CREDENTIALS_FULL_URI", credentials(),
+                "AWS_CONTAINER_AUTHORIZATION_TOKEN", "container-auth"),
+                McpJsonDefaults.getMapper())).isEqualTo("from-env");
+        assertThat(asked).isEmpty();
+    }
+
+    /** SnapStart sets no AWS_SESSION_TOKEN: the credentials come from a container endpoint. */
+    @Test
+    void underSnapStartTheSessionTokenComesFromTheContainerEndpoint() {
+        assertThat(ParametersAndSecrets.sessionToken(Map.of(
+                "AWS_CONTAINER_CREDENTIALS_FULL_URI", credentials(),
+                "AWS_CONTAINER_AUTHORIZATION_TOKEN", "container-auth"),
+                McpJsonDefaults.getMapper())).isEqualTo("from-container");
+    }
+
+    @Test
+    void theContainerEndpointMustBeAskedWithItsToken() {
+        assertThatThrownBy(() -> ParametersAndSecrets.sessionToken(Map.of(
+                "AWS_CONTAINER_CREDENTIALS_FULL_URI", credentials(),
+                "AWS_CONTAINER_AUTHORIZATION_TOKEN", "wrong"), McpJsonDefaults.getMapper()))
+                .hasMessageContaining("container credentials endpoint answered 404");
+    }
+
+    private String credentials() {
+        return "http://127.0.0.1:" + extension.getAddress().getPort() + "/2021-04-23/credentials";
     }
 
     @Test
