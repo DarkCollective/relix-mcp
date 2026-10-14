@@ -45,7 +45,7 @@ class StatelessHttpTransportTest {
     void everyToolIsListedAndCallable() throws IOException {
         Map<?, ?> listed = (Map<?, ?>) read(post(request(2, "tools/list", Map.of()))).get("result");
         assertThat((List<?>) listed.get("tools")).extracting(t -> String.valueOf(((Map<?, ?>) t).get("name")))
-                .containsExactly("validate", "explain", "run", "learn");
+                .containsExactly("validate", "explain", "run", "submit", "learn");
 
         Map<?, ?> called = read(post(request(3, "tools/call", Map.of("name", "run",
                 "arguments", Map.of("script", "query { PROJECT Round(2.5) -> r (UNIT) };")))));
@@ -53,7 +53,7 @@ class StatelessHttpTransportTest {
         assertThat(called.get("id")).isEqualTo(3);
         Map<?, ?> result = (Map<?, ?>) called.get("result");
         assertThat(result.get("isError")).isNotEqualTo(true);
-        assertThat(result.toString()).contains("| r |");
+        assertThat(result.toString()).contains("| r NUMBER |");
     }
 
     @Test

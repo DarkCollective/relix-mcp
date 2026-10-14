@@ -28,7 +28,7 @@ class DeadlineTest {
                 run("query { PROJECT Round(2.5) -> r (UNIT) };"));
 
         assertThat(result.isError()).isNotEqualTo(true);
-        assertThat(text(result)).contains("| r |");
+        assertThat(text(result)).contains("| r NUMBER |");
     }
 
     @Test
@@ -42,7 +42,7 @@ class DeadlineTest {
         assertThat(result.isError()).isTrue();
         assertThat(text(result)).startsWith("Stopped at the 1-second limit before it finished. "
                         + "What finished first follows.")
-                .contains("Query 1:\n| n |").contains("| 10 |")
+                .contains("Query 1:\n| n NUMBER |").contains("| 10 |")
                 .endsWith("Stopped before query 2 finished.")
                 .doesNotContain("Query 3");
         assertThat(((Map<?, ?>) result.structuredContent()).get("stopped")).isEqualTo(true);

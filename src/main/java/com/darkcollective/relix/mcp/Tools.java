@@ -25,7 +25,8 @@ import java.util.function.BooleanSupplier;
 import java.util.stream.Collectors;
 
 /**
- * The server's tools: {@code validate}, {@code explain}, {@code run} and {@code learn}.
+ * The server's tools: {@code validate}, {@code explain}, {@code run}, {@code submit} and
+ * {@code learn}.
  *
  * <p>Each is a plain function from arguments to a result, so it is the same whichever
  * transport carries it, and a test calls it without one.
@@ -174,12 +175,36 @@ final class Tools {
             The script's data must be its own: inline tables, views, and generators. Any \
             file, database or HTTP source, connection, or import is refused, so to run a \
             query meant for real data, write a few representative rows as an inline table. \
-            Each query %s and %s. The script is validated first, and an invalid one returns its errors \
-            without running.
+            Each query %s and %s. There is no need to call 'validate' before 'run': run \
+            validates the script first, and an invalid one returns its errors without \
+            running.
+
+            Each column heading gives the column's type: an inline table's column is typed \
+            from its values, so a date written in one is a STRING unless converted. Each \
+            result ends with its order: 'sorted by' the keys the engine guarantees, or 'in \
+            no guaranteed order', when rows that look sorted may come back otherwise. Sort \
+            the result whose order matters, after any join.
+
+            When the script is finished, call 'submit' with it instead of showing it \
+            yourself.
 
             The engine describes a script's own relations, as relations: %s lists each \
             column with the type the engine gave it, and relix.relations lists the \
             relations with their row counts.""";
+
+    private static final String SUBMIT_DESCRIPTION = """
+            Submits your finished Relix script as the answer. It validates and runs the \
+            script exactly as 'run' does, under the same rules, and returns the script \
+            together with the rows the engine produced for it, in a fixed form.
+
+            Show the user that output unchanged, as your answer: do not retype the script \
+            or the rows, and do not add rows of your own. That way the rows shown are the \
+            ones this exact script returns. An invalid script is not submitted: fix what \
+            it reports and submit again.""";
+
+    /** What a submitted answer begins with: the one instruction its reader must follow. */
+    static final String SUBMITTED = "Submitted. Show the user everything below this line "
+            + "unchanged, as your answer: the script, and the rows the engine returned for it.";
 
     private final ScriptValidator validator = new ScriptValidator();
     private final ScriptRunner runner;
@@ -206,7 +231,7 @@ final class Tools {
      * {@return every tool the server offers}
      */
     List<Definition> all() {
-        return List.of(validateTool(), explainTool(), runTool(), learnTool());
+        return List.of(validateTool(), explainTool(), runTool(), submitTool(), learnTool());
     }
 
     /**
@@ -268,6 +293,20 @@ final class Tools {
         return new Definition(tool, this::run);
     }
 
+    Definition submitTool() {
+        Map<String, Object> schema = Map.of(
+                "type", "object",
+                "properties", Map.of("script", Map.of("type", "string",
+                        "description", "the finished Relix script; its data must be inline tables")),
+                "required", List.of("script"));
+        Tool tool = Tool.builder("submit", schema)
+                .title("Submit a finished Relix script with its results")
+                .description(SUBMIT_DESCRIPTION)
+                .annotations(readOnly("Submit a finished Relix script with its results"))
+                .build();
+        return new Definition(tool, this::submit);
+    }
+
     /**
      * The description of {@code run}, with the limits of the sandbox it runs in.
      */
@@ -299,6 +338,10 @@ final class Tools {
                 your own words, and learn searches every page for it. With no topic, lists \
                 every page. The whole grammar, as EBNF, is the page '%s'.
 
+                Pages are long, and each one read stays in the conversation. With detail \
+                'brief', a page is cut to its syntax and one example; ask for the whole \
+                page when you need its rules.
+
                 For a reader that can fetch a URL, the site publishes a primer at %s and \
                 the grammar as plain text at %s; they describe the current release.
 
@@ -314,9 +357,13 @@ final class Tools {
     Definition learnTool() {
         Map<String, Object> schema = Map.of(
                 "type", "object",
-                "properties", Map.of("topic", Map.of("type", "string",
-                        "description", "a glyph, keyword, function name or page "
-                                + "path; omit to list every page")));
+                "properties", Map.of(
+                        "topic", Map.of("type", "string",
+                                "description", "a glyph, keyword, function name or page "
+                                        + "path; omit to list every page"),
+                        "detail", Map.of("type", "string", "enum", List.of(FULL, BRIEF),
+                                "description", "'full' (the default) for the whole page, "
+                                        + "'brief' for its syntax and one example")));
         Tool tool = Tool.builder("learn", schema)
                 .title("Read the Relix reference")
                 .description(learnDescription())
@@ -324,6 +371,10 @@ final class Tools {
                 .build();
         return new Definition(tool, (request, stopped) -> learn(request));
     }
+
+    /** The two lengths {@code learn} serves a page at. */
+    static final String FULL = "full";
+    static final String BRIEF = "brief";
 
     /** What an offline tool was asked to look at, once its arguments have been read. */
     private record OfflineRequest(String script, Map<String, String> files, CallerCatalog catalog) {
@@ -420,15 +471,63 @@ final class Tools {
         if (report.stopped() && report.results().isEmpty()) {
             return NOTHING_FINISHED;
         }
-        Map<String, Object> data = new LinkedHashMap<>();
-        data.put("valid", report.valid());
-        data.put("stopped", report.stopped());
-        data.put("findings", report.findings().stream().map(Tools::asData).toList());
-        data.put("results", report.results().stream().map(Tools::asData).toList());
         return CallToolResult.builder()
                 .addTextContent(report.render())
+                .structuredContent(asData(report))
+                .build();
+    }
+
+    CallToolResult submit(CallToolRequest request) {
+        return submit(request, NEVER);
+    }
+
+    /**
+     * Runs the finished script and returns it with its rows, as one answer to be shown
+     * as it is.
+     *
+     * <p>A model that writes its answer itself shows a script it did not last run, or rows
+     * it predicted, and sometimes loses the answer in a garbled closing message. Here the
+     * script and the engine's rows travel together in a tool result, which a client can
+     * read whatever the model says afterwards. Only a valid script that ran to the end is
+     * submitted.
+     */
+    CallToolResult submit(CallToolRequest request, BooleanSupplier stopped) {
+        Object script = request.arguments() == null ? null : request.arguments().get("script");
+        if (!(script instanceof String text)) {
+            return failure("'script' is required: the text of the finished Relix script.");
+        }
+        RunReport report = runner.run(text, stopped);
+        if (report.stopped() && report.results().isEmpty()) {
+            return NOTHING_FINISHED;
+        }
+        boolean submitted = report.valid() && !report.stopped();
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("submitted", submitted);
+        data.put("script", text);
+        data.putAll(asData(report));
+        String answer = submitted
+                ? SUBMITTED + "\n\n" + fenced(text) + "\n\n" + report.render()
+                : "Not submitted: " + (report.valid()
+                        ? "the run was stopped before every query finished. Make the script "
+                                + "cheaper, then call 'submit' again."
+                        : "fix these, then call 'submit' again on the fixed script.")
+                        + "\n\n" + report.render();
+        return CallToolResult.builder()
+                .addTextContent(answer)
                 .structuredContent(data)
                 .build();
+    }
+
+    /** A script as a fenced code block, its fence longer than any run of backticks in it. */
+    private static String fenced(String script) {
+        int longest = 0;
+        int run = 0;
+        for (char c : script.toCharArray()) {
+            run = c == '`' ? run + 1 : 0;
+            longest = Math.max(longest, run);
+        }
+        String fence = "`".repeat(Math.max(3, longest + 1));
+        return fence + "relix\n" + script.strip() + "\n" + fence;
     }
 
     CallToolResult learn(CallToolRequest request) {
@@ -437,7 +536,11 @@ final class Tools {
             return text(reference.contents());
         }
         String asked = topic.toString();
-        return reference.page(asked).map(Tools::text).orElseGet(() -> {
+        boolean brief = request.arguments().get("detail") instanceof String detail
+                && detail.strip().equalsIgnoreCase(BRIEF);
+        return reference.page(asked).map(page -> text(brief ? Reference.brief(page)
+                + "\n\n(The syntax and one example. Ask learn for '" + asked.strip()
+                + "' without detail 'brief' for the whole page.)" : page)).orElseGet(() -> {
             List<Reference.Hit> hits = reference.search(asked);
             StringBuilder answer = new StringBuilder("No page is called '").append(asked)
                     .append("'.");
@@ -486,11 +589,23 @@ final class Tools {
         return data;
     }
 
+    /** A run as the JSON object a client receives. */
+    private static Map<String, Object> asData(RunReport report) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("valid", report.valid());
+        data.put("stopped", report.stopped());
+        data.put("findings", report.findings().stream().map(Tools::asData).toList());
+        data.put("results", report.results().stream().map(Tools::asData).toList());
+        return data;
+    }
+
     /** A query's result as the JSON object a client receives. */
     private static Map<String, Object> asData(QueryResult result) {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("name", result.name());
         data.put("columns", result.columns());
+        data.put("types", result.types());
+        data.put("ordering", result.ordering());
         data.put("rows", result.rows());
         data.put("truncated", result.truncated());
         data.put("failure", result.failure());
