@@ -32,13 +32,13 @@ class LambdaHandlerTest {
     private static final McpJsonMapper JSON = McpJsonDefaults.getMapper();
     private static final String KEY = "test-key-0123456789";
 
-    /** {@code run} with no limit of the sandbox's own to reach before the deadline. */
+    /** {@code relix_run} with no limit of the sandbox's own to reach before the deadline. */
     private final LambdaHandler handler = new LambdaHandler(new ApiKeyAuthenticator(KEY),
             new ScriptRunner(Sandbox.builder().build()));
 
     @Test
     void aFunctionUrlEventIsAnsweredLikeAnHttpRequest() throws IOException {
-        Map<?, ?> answer = invoke(event(KEY, call(1, "run",
+        Map<?, ?> answer = invoke(event(KEY, call(1, "relix_run",
                 "query { PROJECT Round(2.5) -> r (UNIT) };")), Duration.ofSeconds(30));
 
         assertThat(answer.get("statusCode")).isEqualTo(200);
@@ -84,7 +84,7 @@ class LambdaHandlerTest {
     @Test
     void aBase64BodyIsDecoded() throws IOException {
         Map<String, Object> event = event(KEY, Base64.getEncoder().encodeToString(
-                call(1, "learn", "").getBytes(StandardCharsets.UTF_8)));
+                call(1, "relix_learn", "").getBytes(StandardCharsets.UTF_8)));
         event.put("isBase64Encoded", true);
 
         assertThat(invoke(event, Duration.ofSeconds(30)).get("statusCode")).isEqualTo(200);
@@ -92,7 +92,7 @@ class LambdaHandlerTest {
 
     @Test
     void onlyTheMcpPathIsServed() throws IOException {
-        Map<String, Object> event = event(KEY, call(1, "learn", ""));
+        Map<String, Object> event = event(KEY, call(1, "relix_learn", ""));
         event.put("rawPath", "/");
 
         assertThat(invoke(event, Duration.ofSeconds(30)).get("statusCode")).isEqualTo(404);
@@ -102,7 +102,7 @@ class LambdaHandlerTest {
     void behindACdnThePathIsTheCdns() throws IOException {
         LambdaHandler behindCdn = new LambdaHandler(new ApiKeyAuthenticator(KEY),
                 new ScriptRunner(), "/mcp/private");
-        Map<String, Object> event = event(KEY, call(1, "learn", ""));
+        Map<String, Object> event = event(KEY, call(1, "relix_learn", ""));
         event.put("rawPath", "/mcp/private");
 
         assertThat(behindCdn.respond(event, Deadline.after(Duration.ofSeconds(30))).status())
@@ -131,7 +131,7 @@ class LambdaHandlerTest {
     void aScriptPastTheDeadlineIsAnsweredBeforeThePlatformStopsIt() throws IOException {
         Duration platform = Deadline.MARGIN.plusMillis(500);
         long started = System.nanoTime();
-        Map<?, ?> answer = invoke(event(KEY, call(7, "run", SlowScript.TEXT)), platform);
+        Map<?, ?> answer = invoke(event(KEY, call(7, "relix_run", SlowScript.TEXT)), platform);
         Duration took = Duration.ofNanos(System.nanoTime() - started);
 
         assertThat(took).isLessThan(platform);
@@ -196,7 +196,7 @@ class LambdaHandlerTest {
     }
 
     private static String call(int id, String tool, String script) throws IOException {
-        Map<String, Object> arguments = tool.equals("run") ? Map.of("script", script) : Map.of();
+        Map<String, Object> arguments = tool.equals("relix_run") ? Map.of("script", script) : Map.of();
         return JSON.writeValueAsString(Map.of("jsonrpc", "2.0", "id", id, "method", "tools/call",
                 "params", Map.of("name", tool, "arguments", arguments)));
     }

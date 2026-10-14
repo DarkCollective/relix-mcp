@@ -15,6 +15,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -73,16 +75,16 @@ class ToolsTest {
     }
 
     @Test
-    void theToolsAreValidateExplainRunSubmitAndLearn() {
+    void theToolsAreNamedAfterTheLanguage() {
         assertThat(tools.all()).extracting(t -> t.tool().name())
-                .containsExactly("validate", "explain", "run", "submit", "learn");
+                .containsExactly("relix_validate", "relix_explain", "relix_run", "relix_submit", "relix_learn");
         assertThat(tools.all()).allSatisfy(t ->
                 assertThat(t.tool().annotations().readOnlyHint()).isTrue());
     }
 
     @Test
     void validateAnswersInTextAndAsData() {
-        CallToolResult result = tools.validate(call("validate",
+        CallToolResult result = tools.validate(call("relix_validate",
                 Map.of("script", "query { SELECT a > 1 (Nowhere) };")));
 
         assertThat(result.isError()).isNotEqualTo(Boolean.TRUE);
@@ -107,12 +109,12 @@ class ToolsTest {
         args.put("files", Map.of("lib.relix", "Ids := [\n| id |\n|----|\n| 1 |\n];"));
         args.put("catalog", Map.of("wh", Map.of("orders", Map.of("id", "NUMBER"))));
 
-        assertThat(text(tools.validate(call("validate", args)))).isEqualTo("Valid.");
+        assertThat(text(tools.validate(call("relix_validate", args)))).isEqualTo("Valid.");
     }
 
     @Test
     void runReturnsTheRowsInTextAndAsData() {
-        CallToolResult result = tools.run(call("run", Map.of("script", examples(Tools.PRIMER).getFirst())));
+        CallToolResult result = tools.run(call("relix_run", Map.of("script", examples(Tools.PRIMER).getFirst())));
 
         assertThat(text(result)).startsWith("Query 1:").contains("| 1 | 120 |")
                 .contains("(1 row, in no guaranteed order)");
@@ -123,21 +125,74 @@ class ToolsTest {
                 .containsExactly("name", "columns", "types", "ordering", "rows", "truncated", "failure"));
     }
 
+    /**
+     * Every tool a description, an answer or the server's instructions tells a model to call
+     * is one the server lists, and none is named the old way, without the language. A model
+     * that calls a name the server does not have gets an error, not the tool.
+     */
+    @Test
+    void everyToolTheTextNamesIsOneTheServerLists() {
+        Set<String> names = new HashSet<>();
+        StringBuilder text = new StringBuilder(Main.INSTRUCTIONS);
+        for (Tools.Definition definition : tools.all()) {
+            names.add(definition.tool().name());
+            text.append('\n').append(definition.tool().description());
+        }
+        text.append(Tools.REVALIDATE).append(text(tools.run(call("relix_run",
+                Map.of("script", ForeignCodeTest.KNAPSACK)))));
+
+        Matcher named = Pattern.compile("'(relix_\\w+)'").matcher(text);
+        int found = 0;
+        while (named.find()) {
+            assertThat(names).contains(named.group(1));
+            found++;
+        }
+        assertThat(found).isGreaterThan(10);
+        assertThat(text.toString()).doesNotContainPattern("'(validate|explain|run|submit|learn)'");
+    }
+
+    @Test
+    void runAndSubmitSayFirstThatTheyRunRelixOnly() {
+        assertThat(tools.runTool().tool().description()).startsWith(Tools.RELIX_ONLY);
+        assertThat(tools.submitTool().tool().description()).startsWith(Tools.RELIX_ONLY);
+    }
+
+    @Test
+    void codeInAnotherLanguageIsAnsweredWithWhereToLook() {
+        String pointer = ForeignCode.pointer(ForeignCodeTest.KNAPSACK).orElseThrow();
+        Map<String, Object> args = Map.of("script", ForeignCodeTest.KNAPSACK);
+
+        assertThat(text(tools.run(call("relix_run", args)))).startsWith(pointer)
+                .contains("Invalid, so nothing ran:\nscript:1:");
+        assertThat(text(tools.submit(call("relix_submit", args)))).startsWith(pointer)
+                .contains("Not submitted");
+        assertThat(text(tools.validate(call("relix_validate", args)))).startsWith(pointer)
+                .endsWith(Tools.REVALIDATE);
+        assertThat(text(tools.explain(call("relix_explain", args)))).startsWith(pointer);
+    }
+
+    @Test
+    void anInvalidRelixScriptGetsItsErrorsAlone() {
+        String script = "query { SELECT amount >> 100 (Orders) };";
+        assertThat(text(tools.run(call("relix_run", Map.of("script", script)))))
+                .doesNotContain("not a code runner");
+    }
+
     @Test
     void runSaysThereIsNoNeedToValidateFirst() {
         assertThat(tools.runTool().tool().description())
-                .contains("There is no need to call 'validate' before 'run'")
-                .contains("in no guaranteed order").contains("'submit'");
+                .contains("There is no need to call 'relix_validate' before 'relix_run'")
+                .contains("in no guaranteed order").contains("'relix_submit'");
     }
 
     @Test
     void submitReturnsTheScriptAndTheEnginesRowsTogether() {
         String script = examples(Tools.PRIMER).getFirst();
-        CallToolResult result = tools.submit(call("submit", Map.of("script", script)));
+        CallToolResult result = tools.submit(call("relix_submit", Map.of("script", script)));
 
         assertThat(result.isError()).isNotEqualTo(Boolean.TRUE);
         assertThat(text(result)).isEqualTo(Tools.SUBMITTED + "\n\n```relix\n" + script.strip()
-                + "\n```\n\n" + text(tools.run(call("run", Map.of("script", script)))));
+                + "\n```\n\n" + text(tools.run(call("relix_run", Map.of("script", script)))));
         Map<?, ?> data = (Map<?, ?>) result.structuredContent();
         assertThat(data.get("submitted")).isEqualTo(true);
         assertThat(data.get("script")).isEqualTo(script);
@@ -148,33 +203,33 @@ class ToolsTest {
     void aScriptWithBackticksIsFencedLongerThanThem() {
         String script = "-- ``` is not a fence here\nquery { PROJECT 1 -> one (UNIT) };";
 
-        assertThat(text(tools.submit(call("submit", Map.of("script", script)))))
+        assertThat(text(tools.submit(call("relix_submit", Map.of("script", script)))))
                 .contains("\n````relix\n" + script + "\n````\n");
     }
 
     @Test
     void anInvalidScriptIsNotSubmitted() {
-        CallToolResult result = tools.submit(call("submit",
+        CallToolResult result = tools.submit(call("relix_submit",
                 Map.of("script", "query { SELECT a > 1 (Nowhere) };")));
 
         assertThat(text(result)).startsWith("Not submitted: fix these").contains("Nowhere")
                 .doesNotContain(Tools.SUBMITTED);
         assertThat(((Map<?, ?>) result.structuredContent()).get("submitted")).isEqualTo(false);
-        assertThat(tools.submit(call("submit", Map.of())).isError()).isTrue();
+        assertThat(tools.submit(call("relix_submit", Map.of())).isError()).isTrue();
     }
 
     @Test
     void theInstructionsSayToFinishWithSubmit() {
-        assertThat(Main.INSTRUCTIONS).contains("Finish by calling 'submit'")
+        assertThat(Main.INSTRUCTIONS).contains("Finish by calling 'relix_submit'")
                 .contains("output unchanged");
     }
 
     @Test
     void runRefusesExternalDataAndAMissingScript() {
-        assertThat(text(tools.run(call("run", Map.of("script",
+        assertThat(text(tools.run(call("relix_run", Map.of("script",
                 "source C from csv(\"c.csv\") { header: true, schema: { id: NUMBER } };\nquery { C };")))))
                 .contains("does not permit");
-        assertThat(tools.run(call("run", Map.of())).isError()).isTrue();
+        assertThat(tools.run(call("relix_run", Map.of())).isError()).isTrue();
     }
 
     @Test
@@ -184,7 +239,7 @@ class ToolsTest {
                 .takeWhile(line -> !line.startsWith("Big"))
                 .reduce("", (script, line) -> script + line + "\n");
 
-        CallToolResult result = tools.run(call("run", Map.of("script", orders + Tools.CATALOG_QUERY)));
+        CallToolResult result = tools.run(call("relix_run", Map.of("script", orders + Tools.CATALOG_QUERY)));
 
         Map<?, ?> data = (Map<?, ?>) result.structuredContent();
         assertThat(data.get("valid")).isEqualTo(true);
@@ -203,7 +258,7 @@ class ToolsTest {
                 """);
         args.put("catalog", Map.of("wh", Map.of("orders", Map.of("amount", "NUMBER"))));
 
-        CallToolResult result = tools.explain(call("explain", args));
+        CallToolResult result = tools.explain(call("relix_explain", args));
 
         assertThat(text(result)).contains("Plan:").contains("PushedScan").contains("WHERE");
         Map<?, ?> data = (Map<?, ?>) result.structuredContent();
@@ -214,15 +269,15 @@ class ToolsTest {
 
     @Test
     void explainReadsItsArgumentsAsValidateDoes() {
-        assertThat(tools.explain(call("explain", Map.of())).isError()).isTrue();
-        assertThat(text(tools.explain(call("explain", Map.of())))).contains("to explain");
-        assertThat(tools.explain(call("explain", Map.of("script", "", "catalog", "x"))).isError())
+        assertThat(tools.explain(call("relix_explain", Map.of())).isError()).isTrue();
+        assertThat(text(tools.explain(call("relix_explain", Map.of())))).contains("to explain");
+        assertThat(tools.explain(call("relix_explain", Map.of("script", "", "catalog", "x"))).isError())
                 .isTrue();
     }
 
     @Test
     void aMissingScriptIsAToolError() {
-        CallToolResult result = tools.validate(call("validate", Map.of()));
+        CallToolResult result = tools.validate(call("relix_validate", Map.of()));
 
         assertThat(result.isError()).isTrue();
         assertThat(text(result)).contains("'script' is required");
@@ -230,7 +285,7 @@ class ToolsTest {
 
     @Test
     void aCatalogNamingAnUnknownTypeIsAToolErrorListingTheTypes() {
-        CallToolResult result = tools.validate(call("validate", Map.of(
+        CallToolResult result = tools.validate(call("relix_validate", Map.of(
                 "script", "query { X };",
                 "catalog", Map.of("wh", Map.of("t", Map.of("c", "INTEGER"))))));
 
@@ -240,48 +295,48 @@ class ToolsTest {
 
     @Test
     void malformedFilesAndCatalogAreToolErrors() {
-        assertThat(tools.validate(call("validate", Map.of("script", "", "files", "x"))).isError())
+        assertThat(tools.validate(call("relix_validate", Map.of("script", "", "files", "x"))).isError())
                 .isTrue();
-        assertThat(tools.validate(call("validate", Map.of("script", "",
+        assertThat(tools.validate(call("relix_validate", Map.of("script", "",
                 "files", Map.of("a.relix", 1)))).isError()).isTrue();
-        assertThat(tools.validate(call("validate", Map.of("script", "", "catalog", "x")))
+        assertThat(tools.validate(call("relix_validate", Map.of("script", "", "catalog", "x")))
                 .isError()).isTrue();
-        assertThat(tools.validate(call("validate", Map.of("script", "",
+        assertThat(tools.validate(call("relix_validate", Map.of("script", "",
                 "catalog", Map.of("wh", "x")))).isError()).isTrue();
-        assertThat(tools.validate(call("validate", Map.of("script", "",
+        assertThat(tools.validate(call("relix_validate", Map.of("script", "",
                 "catalog", Map.of("wh", Map.of("t", Map.of()))))).isError()).isTrue();
-        assertThat(tools.validate(call("validate", Map.of("script", "",
+        assertThat(tools.validate(call("relix_validate", Map.of("script", "",
                 "catalog", Map.of("wh", Map.of("t", Map.of("c", 3)))))).isError()).isTrue();
     }
 
     @Test
     void learnWithNoTopicListsThePages() {
-        String contents = text(tools.learn(call("learn", Map.of())));
+        String contents = text(tools.learn(call("relix_learn", Map.of())));
 
         assertThat(contents).contains("Selection").contains("operators/select.md");
     }
 
     @Test
     void learnFindsAPageByGlyphKeywordOrPath() {
-        String byGlyph = text(tools.learn(call("learn", Map.of("topic", "σ"))));
+        String byGlyph = text(tools.learn(call("relix_learn", Map.of("topic", "σ"))));
 
         assertThat(byGlyph).contains("Selection");
-        assertThat(text(tools.learn(call("learn", Map.of("topic", "SELECT"))))).isEqualTo(byGlyph);
-        assertThat(text(tools.learn(call("learn", Map.of("topic", "operators/select.md")))))
+        assertThat(text(tools.learn(call("relix_learn", Map.of("topic", "SELECT"))))).isEqualTo(byGlyph);
+        assertThat(text(tools.learn(call("relix_learn", Map.of("topic", "operators/select.md")))))
                 .isEqualTo(byGlyph);
     }
 
     @Test
     void aBriefPageIsItsSyntaxAndOneExample() {
-        String full = text(tools.learn(call("learn", Map.of("topic", "σ"))));
-        String brief = text(tools.learn(call("learn", Map.of("topic", "σ", "detail", "brief"))));
+        String full = text(tools.learn(call("relix_learn", Map.of("topic", "σ"))));
+        String brief = text(tools.learn(call("relix_learn", Map.of("topic", "σ", "detail", "brief"))));
 
         assertThat(brief).startsWith("# Name:").contains("# Syntax:").contains("# Example:")
                 .contains("σ age >= 18 (Users)").doesNotContain("# Description:")
                 .doesNotContain("Customers in a specific city")
                 .endsWith("without detail 'brief' for the whole page.)");
         assertThat(brief.length()).isLessThan(full.length() / 4);
-        assertThat(text(tools.learn(call("learn", Map.of("topic", "σ", "detail", "full")))))
+        assertThat(text(tools.learn(call("relix_learn", Map.of("topic", "σ", "detail", "full")))))
                 .isEqualTo(full);
     }
 
@@ -291,7 +346,7 @@ class ToolsTest {
         RelixDocs.referencePages().forEach(p -> pages.add(p.path()));
         pages.addAll(List.of("round", "coalesce"));
         for (String page : pages) {
-            String brief = text(tools.learn(call("learn", Map.of("topic", page, "detail", "brief"))));
+            String brief = text(tools.learn(call("relix_learn", Map.of("topic", page, "detail", "brief"))));
             assertThat(brief).as(page).contains("# Syntax:").contains("# Example:")
                     .doesNotContain("# Description:");
             String example = brief.substring(brief.indexOf("# Example:"));
@@ -302,15 +357,15 @@ class ToolsTest {
 
     @Test
     void learnFindsAFunctionPageFromItsLibrary() {
-        String page = text(tools.learn(call("learn", Map.of("topic", "round"))));
+        String page = text(tools.learn(call("relix_learn", Map.of("topic", "round"))));
 
         assertThat(page).doesNotContain("No reference page").contains("Round");
-        assertThat(text(tools.learn(call("learn", Map.of())))).contains("Round");
+        assertThat(text(tools.learn(call("relix_learn", Map.of())))).contains("Round");
     }
 
     @Test
     void aMissPointsAtTheSpellingsPage() {
-        assertThat(text(tools.learn(call("learn", Map.of("topic", "zzzzqqq")))))
+        assertThat(text(tools.learn(call("relix_learn", Map.of("topic", "zzzzqqq")))))
                 .contains("spellings");
     }
 
@@ -327,14 +382,14 @@ class ToolsTest {
         // "anti" is inside "quantifier"; asking for the ASCII keyword ANTI must land on
         // the anti join. The engine registers each operator's ASCII spelling as a page
         // key, so ANTI now resolves to the page directly rather than through search.
-        String answer = text(tools.learn(call("learn", Map.of("topic", "ANTI"))));
+        String answer = text(tools.learn(call("relix_learn", Map.of("topic", "ANTI"))));
         assertThat(answer).contains("Anti Join").contains("▷")
                 .doesNotContain("Universal Quantification");
     }
 
     @Test
     void aSearchShowsTheSummaryAndTheLineThatMatched() {
-        String answer = text(tools.learn(call("learn", Map.of("topic", "pairwise test combinations"))));
+        String answer = text(tools.learn(call("relix_learn", Map.of("topic", "pairwise test combinations"))));
 
         assertThat(answer).contains("- Cover [advanced/cover.md]: Combinatorial")
                 .contains("  > ").contains("pairwise");
@@ -342,7 +397,7 @@ class ToolsTest {
 
     @Test
     void aTopicNoPageMentionsSaysSo() {
-        assertThat(text(tools.learn(call("learn", Map.of("topic", "zzzzqqq")))))
+        assertThat(text(tools.learn(call("relix_learn", Map.of("topic", "zzzzqqq")))))
                 .contains("No page mentions it").contains("no topic");
     }
 
@@ -403,7 +458,7 @@ class ToolsTest {
 
     @Test
     void theGrammarIsAPageLearnServesAndTheSiteCopiesAreLinked() {
-        String grammar = text(tools.learn(call("learn", Map.of("topic", Tools.GRAMMAR_PAGE))));
+        String grammar = text(tools.learn(call("relix_learn", Map.of("topic", Tools.GRAMMAR_PAGE))));
 
         assertThat(grammar).startsWith("# Name: Grammar").contains("::=");
         assertThat(tools.learnTool().tool().description()).contains(Tools.GRAMMAR_PAGE)
@@ -419,7 +474,7 @@ class ToolsTest {
     }
 
     private String firstHit(String request) {
-        return text(tools.learn(call("learn", Map.of("topic", request)))).lines()
+        return text(tools.learn(call("relix_learn", Map.of("topic", request)))).lines()
                 .filter(l -> l.startsWith("- ")).findFirst()
                 .map(l -> l.substring(2, l.indexOf(" [")))
                 .orElse("(none)");

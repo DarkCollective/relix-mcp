@@ -16,11 +16,11 @@ them over their own inline data, and reads the language reference. The Relix eng
 - **No magic knowledge.** This server is a reference for embedders, so it must not rely
   on engine behaviour that is not documented API: no parsing of message text, no
   internal constants such as the name the engine gives a session's script.
-- **The offline tools open nothing.** `validate` and `explain` share one
+- **The offline tools open nothing.** `relix_validate` and `relix_explain` share one
   `OfflineSession`, which always passes a catalog, so live introspection is never
   constructed, and they call only terminals that read no rows. `NothingIsOpenedTest`
   counts connections, requests and file reads for both.
-- **`run` executes only inside a closed sandbox with no declarations.** It accepts inline
+- **`relix_run` executes only inside a closed sandbox with no declarations.** It accepts inline
   tables, views, functions and generators, and refuses every file, database, HTTP source,
   connection and import. Never widen it with an open session.
 - **Tools are transport-neutral.** A tool is a `Tools.Definition` (a `Tool` and a

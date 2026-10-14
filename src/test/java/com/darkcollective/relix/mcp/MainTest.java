@@ -71,7 +71,7 @@ class MainTest {
             assertThat(server.uri().toString()).matches("http://127\\.0\\.0\\.1:\\d+/mcp");
 
             HttpResponse<String> response = post(server.uri(), """
-                    {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"validate",
+                    {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"relix_validate",
                      "arguments":{"script":"query { SELECT a > 1 (Nowhere) };"}}}""");
 
             assertThat(response.statusCode()).isEqualTo(200);

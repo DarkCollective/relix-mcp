@@ -198,7 +198,7 @@ final class Reference {
      * One page a search found.
      *
      * @param title   the page's title, or the function's name
-     * @param where   how to ask {@code learn} for it: a page path, or a function name
+     * @param where   how to ask {@code relix_learn} for it: a page path, or a function name
      * @param summary the page's one-line summary
      * @param excerpt the line of the page that best matches what was asked, or empty
      */
