@@ -1,5 +1,6 @@
 package com.darkcollective.relix.mcp;
 
+import com.darkcollective.relix.docs.ReferencePage;
 import com.darkcollective.relix.docs.RelixDocs;
 import com.darkcollective.relix.mcp.offline.CallerCatalog;
 import com.darkcollective.relix.mcp.offline.ScriptValidator;
@@ -10,8 +11,10 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -341,6 +344,53 @@ class ToolsTest {
     void aTopicNoPageMentionsSaysSo() {
         assertThat(text(tools.learn(call("learn", Map.of("topic", "zzzzqqq")))))
                 .contains("No page mentions it").contains("no topic");
+    }
+
+    /**
+     * The keywords the primer names for the operators SQL lacks, and the one family it
+     * names by its page's title, record linkage having no keyword of its own. A model reads the primer's
+     * list as the whole of what Relix can do, so a family missing from it is one the model
+     * concludes the language cannot express (issue 26: no optimisation, so a knapsack was
+     * solved in Python and its answer recited in a script).
+     */
+    private static final List<String> PRIMER_OPERATORS = List.of("CLOSURE", "PATH", "TRACE",
+            "FIX", "ITERATE", "OPTIMIZE", "SOLVE", "COVER", "SESSIONIZE", "DOWNSAMPLE", "ASOF",
+            "TOP", "SAMPLE", "CLUSTER", "record linkage");
+
+    /** Pages in {@code advanced} that describe the engine rather than an operator. */
+    private static final Set<String> NOT_OPERATORS = Set.of("Optimizer", "Pushdown");
+
+    /**
+     * Pages a keyword the primer names does not open, but whose page links them: one
+     * spelling, two pages.
+     */
+    private static final Map<String, String> REACHED_THROUGH = Map.of("Reservoir", "SAMPLE");
+
+    @Test
+    void thePrimerNamesAnOperatorForEveryAdvancedPage() {
+        Reference reference = new Reference();
+        Set<String> reached = new HashSet<>();
+        for (String keyword : PRIMER_OPERATORS) {
+            assertThat(Tools.PRIMER).as(keyword).containsPattern("\\b" + keyword + "\\b");
+            reached.add(reference.page(keyword).orElseThrow(
+                    () -> new AssertionError("no page for " + keyword)));
+        }
+
+        for (ReferencePage page : reference.category("advanced")) {
+            if (NOT_OPERATORS.contains(page.title())) {
+                continue;
+            }
+            String through = REACHED_THROUGH.get(page.title());
+            if (through != null) {
+                String file = page.path().substring(page.path().lastIndexOf('/') + 1);
+                assertThat(reference.page(through).orElseThrow())
+                        .as(through + " links " + page.title()).contains("(" + file + ")");
+                continue;
+            }
+            String markdown = RelixDocs.referencePage(page.path()).orElseThrow();
+            assertThat(reached).as("the primer names no keyword reaching " + page.title()
+                    + " (" + page.path() + ")").contains(markdown);
+        }
     }
 
     @Test
