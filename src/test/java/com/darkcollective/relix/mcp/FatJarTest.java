@@ -35,8 +35,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>What it guards is the merge. The engine finds its function library, its connectors
  * and its reference pages by {@code ServiceLoader} and resources, and a jar assembled from
  * forty can lose any of them without failing to compile, start or answer {@code initialize}.
- * So each call here needs one: {@code Round} the function library, a {@code jdbc} URL the
- * standard connectors and the Postgres dialect, {@code learn} the bundled pages. Run by
+ * So each call here needs one: {@code Round} the function library, {@code OPTIMIZE} the
+ * solver, a {@code jdbc} URL the standard connectors and the Postgres dialect, {@code learn}
+ * the bundled pages. Run by
  * {@code fatJarTest}, which builds the jar first.
  */
 @Tag("fat-jar")
@@ -141,6 +142,21 @@ class FatJarTest {
         String body = call("run", "{\"script\":\"query { PROJECT Round(2.6) -> r (UNIT) };\"}");
 
         assertThat(body).contains("| r NUMBER |").contains("| 3 |");
+    }
+
+    @Test
+    void runOptimizesWithTheSolver() throws Exception {
+        String body = call("run", """
+                {"script":"Backlog := [\\n\
+                | feature | value | cost |\\n\
+                |---------|-------|------|\\n\
+                | Search  | 60    | 10   |\\n\
+                | Mobile  | 100   | 20   |\\n\
+                | Boards  | 120   | 30   |\\n\
+                ];\\n\
+                query { OPTIMIZE MAXIMIZE SUM(value) SUBJECT TO SUM(cost) <= 30 (Backlog) };"}""");
+
+        assertThat(body).contains("| Search ").contains("| Mobile ").doesNotContain("| Boards ");
     }
 
     @Test
