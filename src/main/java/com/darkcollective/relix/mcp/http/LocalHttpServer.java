@@ -103,7 +103,10 @@ public final class LocalHttpServer implements AutoCloseable {
             }
             String body = readBody(exchange.getRequestBody());
             if (body == null) {
-                // Read no further than the cap: the transport would refuse it anyway.
+                // The transport would refuse it anyway, so none of it is kept. But it is
+                // read, to a bound: a socket closed with a body still arriving is reset,
+                // and a sender still writing then reads the reset rather than the 413.
+                discard(exchange.getRequestBody(), DRAIN_BYTES);
                 exchange.sendResponseHeaders(413, -1);
                 return;
             }
@@ -120,6 +123,22 @@ public final class LocalHttpServer implements AutoCloseable {
             try (OutputStream out = exchange.getResponseBody()) {
                 out.write(bytes);
             }
+        }
+    }
+
+    /**
+     * How much of a refused body is read and thrown away before the refusal is sent. A body
+     * larger still is cut off, and its sender may see the connection reset.
+     */
+    static final long DRAIN_BYTES = 16L * StatelessHttpTransport.MAX_BODY_BYTES;
+
+    /** Reads and discards up to {@code limit} bytes, stopping early at the end of the body. */
+    private static void discard(InputStream in, long limit) throws IOException {
+        byte[] buffer = new byte[64 * 1024];
+        long left = limit;
+        int read;
+        while (left > 0 && (read = in.read(buffer, 0, (int) Math.min(buffer.length, left))) >= 0) {
+            left -= read;
         }
     }
 
