@@ -35,7 +35,7 @@ class ScriptValidatorTest {
 
     @Test
     void aSyntaxErrorIsPlacedAtItsLineAndColumn() {
-        ValidationReport report = check(ORDERS + "query { SELECT amount <> 100 (Orders) };");
+        ValidationReport report = check(ORDERS + "query { SELECT amount >< 100 (Orders) };");
 
         assertThat(report.valid()).isFalse();
         Finding error = report.findings().getFirst();

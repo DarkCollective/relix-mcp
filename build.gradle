@@ -27,7 +27,7 @@ java {
     }
 }
 
-ext.relixVersion = (findProperty('relixVersion') ?: '1.0.0-rc9') as String
+ext.relixVersion = (findProperty('relixVersion') ?: '1.0.0-rc10') as String
 
 dependencies {
     implementation "com.darkcollective.relix:relix:${relixVersion}"
