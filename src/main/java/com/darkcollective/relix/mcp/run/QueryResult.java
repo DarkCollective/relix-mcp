@@ -11,6 +11,7 @@ import com.darkcollective.relix.value.BooleanValue;
 import com.darkcollective.relix.value.NumberValue;
 import com.darkcollective.relix.value.Value;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -26,7 +27,9 @@ import java.util.List;
  * @param ordering  the order the rows are guaranteed to come in, one sort key each
  *                  ({@code spend DESC}); empty when no order is guaranteed
  * @param rows      each row's values, in column order: a number, a boolean, null, or
- *                  the engine's display text for anything else
+ *                  the engine's display text for anything else. A number a double cannot
+ *                  hold exactly is its exact decimal text instead, typed NUMBER in
+ *                  {@code types}
  * @param truncated whether the result was cut at the row limit
  * @param failure   what stopped the query, or null when it ran
  */
@@ -98,15 +101,26 @@ public record QueryResult(String name, List<String> columns, List<String> types,
         return failure == null;
     }
 
-    /** A value as JSON has it: numbers and booleans as themselves, the rest as text. */
+    /**
+     * A value as JSON has it: numbers and booleans as themselves, the rest as text. A
+     * number is written as its exact decimal text when a client that reads JSON numbers
+     * as doubles, as JavaScript does, would read a different number.
+     */
     private static Object plain(Value value) {
         if (value.isNull()) {
             return null;
         }
         return switch (value) {
-            case NumberValue number -> number.value();
+            case NumberValue number -> readsExactly(number.value())
+                    ? number.value() : number.value().toPlainString();
             case BooleanValue bool -> bool.value();
             default -> value.asDisplayString();
         };
+    }
+
+    /** {@return whether {@code n}, read as the nearest double, prints back as {@code n}} */
+    private static boolean readsExactly(BigDecimal n) {
+        double d = n.doubleValue();
+        return Double.isFinite(d) && BigDecimal.valueOf(d).compareTo(n) == 0;
     }
 }
