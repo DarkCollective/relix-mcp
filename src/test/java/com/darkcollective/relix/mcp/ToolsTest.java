@@ -4,6 +4,7 @@ import com.darkcollective.relix.docs.ReferencePage;
 import com.darkcollective.relix.docs.RelixDocs;
 import com.darkcollective.relix.mcp.offline.CallerCatalog;
 import com.darkcollective.relix.mcp.offline.ScriptValidator;
+import io.modelcontextprotocol.json.McpJsonDefaults;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import io.modelcontextprotocol.spec.McpSchema.TextContent;
@@ -164,6 +165,36 @@ class ToolsTest {
         assertThat((List<?>) data.get("results")).singleElement().satisfies(r -> assertThat(
                 ((Map<?, ?>) r).keySet().stream().map(String::valueOf))
                 .containsExactly("name", "columns", "types", "ordering", "rows", "truncated", "failure"));
+    }
+
+    /**
+     * A client that reads JSON numbers as doubles, as JavaScript's {@code JSON.parse} does,
+     * reads each number in a run's rows as the engine returned it. One a double cannot hold
+     * is sent as its exact text, so it is not rounded to a neighbour; one it can is a number.
+     */
+    @Test
+    void runSendsEveryNumberAsADoubleReaderReadsIt() throws Exception {
+        CallToolResult result = tools.run(call("relix_run", Map.of("script", """
+                T := [
+                | n                   |
+                |---------------------|
+                | 9007199254740993    |
+                | 9223372036854775807 |
+                | 9007199254740992    |
+                | 1.5                 |
+                | 0.1                 |
+                ];
+                query { SORT n ASC (T) };
+                """)));
+
+        Map<?, ?> data = (Map<?, ?>) McpJsonDefaults.getMapper()
+                .readValue(McpJsonDefaults.getMapper().writeValueAsString(result.structuredContent()), Map.class);
+        Map<?, ?> query = (Map<?, ?>) ((List<?>) data.get("results")).getFirst();
+        assertThat(query.get("types")).isEqualTo(List.of("NUMBER"));
+        assertThat(((List<?>) query.get("rows")).stream()
+                .map(row -> ((List<?>) row).getFirst())
+                .map(v -> v instanceof Number n ? (Object) Double.parseDouble(n.toString()) : v))
+                .containsExactly(0.1, 1.5, 9007199254740992.0, "9007199254740993", "9223372036854775807");
     }
 
     /**
