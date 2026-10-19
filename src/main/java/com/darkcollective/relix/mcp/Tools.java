@@ -109,6 +109,10 @@ final class Tools {
             condition written between the inputs, and no JOIN goes in front of it; LJOIN, RJOIN, FJOIN (outer) and SEMI, ANTI \
             (keep rows with, or without, a match) take a condition the same way: \
             Customers ANTI Customers.id = Orders.customer_id Orders. UNION, EXCEPT, INTERSECT.
+            TOP 2 WITH TIES t PER g (R) keeps, in each g, the 2 rows with the smallest t and \
+            every row tied with the 2nd: as in a race, two tied for first fill both places and \
+            nobody is 2nd. Without WITH TIES a tie is cut; t DESC keeps the largest. For the top \
+            N per group use TOP, not MIN, GROUP or ranks worked out by hand.
             Predicates: = != < <= > >=, AND, OR, NOT, x IN {1, 2}, x LIKE 'A%', x IS NULL. \
             Sets take braces, not parentheses. <> is not an operator. Comments are -- to end of line.
             Relix also has operators SQL lacks, each with its own page: graph reachability \
