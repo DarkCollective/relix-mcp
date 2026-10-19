@@ -1,8 +1,10 @@
 // relix-mcp: an MCP server through which a language model checks Relix scripts.
 //
 // It depends on the engine exactly as any program outside the Relix repositories would:
-// one released coordinate from Maven Central, reached through the packages its module
-// descriptor exports. The MCP SDK's jars carry an automatic module name the module
+// one published coordinate from Maven Central, reached through the packages its module
+// descriptor exports. On develop that is the engine's snapshot, so a change merged to
+// relix-core's develop is tried here before it is released; a release pins a released
+// engine, and `engineIsReleased` refuses one that does not. The MCP SDK's jars carry an automatic module name the module
 // system rejects (it has a hyphen), so this builds on the class path, where every package
 // of a jar is readable; EngineBoundaryTest holds the compiled classes to the exported
 // packages instead, reading the export list from the engine jar's own descriptor.
@@ -16,16 +18,39 @@ plugins {
 group = 'com.darkcollective.relix'
 version = '1.0.0-rc1'
 
-ext.relixVersion = (findProperty('relixVersion') ?: '1.0.0-rc11') as String
+// develop tracks the engine's snapshot. Promoting to main pins a released engine here
+// (-PrelixVersion=<release> tries one first); CI refuses a snapshot on main.
+ext.relixVersion = (findProperty('relixVersion') ?: '1.0.0-SNAPSHOT') as String
+ext.relixIsSnapshot = relixVersion.endsWith('-SNAPSHOT')
 
 repositories {
     mavenCentral()
-    // Only to try an engine change before it is released: -PrelixVersion=1.0.0-SNAPSHOT.
-    // A build left at the default never looks here.
-    if (relixVersion.endsWith('-SNAPSHOT')) {
+    // Central's snapshot repository, looked in only while the engine is a snapshot.
+    if (relixIsSnapshot) {
         maven {
             url = 'https://central.sonatype.com/repository/maven-snapshots/'
             mavenContent { snapshotsOnly() }
+        }
+    }
+}
+
+// A snapshot is republished on every push to relix-core's develop; check for a newer one
+// on each build rather than keeping a resolved one for Gradle's default day.
+if (relixIsSnapshot) {
+    configurations.configureEach {
+        resolutionStrategy.cacheChangingModulesFor 0, 'seconds'
+    }
+}
+
+// What CI runs for main: a release must not depend on an engine that can change under it.
+tasks.register('engineIsReleased') {
+    group = 'verification'
+    description = 'Fails when the engine is a snapshot, as it must not be on main.'
+    def engine = relixVersion
+    doLast {
+        if (engine.endsWith('-SNAPSHOT')) {
+            throw new GradleException("The engine is ${engine}, a snapshot. A release pins a "
+                    + "released engine: set relixVersion's default in build.gradle to one.")
         }
     }
 }

@@ -174,7 +174,8 @@ container credentials endpoint instead.
 This server is also an example of embedding Relix, so it uses nothing a program outside
 the Relix repositories could not. It depends on one coordinate from Maven Central,
 `com.darkcollective.relix:relix`, and reaches it only through the packages that jar's
-module descriptor exports. `EngineBoundaryTest` holds it to that: `jdeps` lists every
+module descriptor exports. A release pins a released engine; the `develop` branch builds
+against the engine's snapshot, so an engine change is tried here before it ships. `EngineBoundaryTest` holds it to that: `jdeps` lists every
 engine package the compiled classes use, and each must be exported.
 
 The parts worth reading as examples:
