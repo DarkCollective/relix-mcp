@@ -473,6 +473,44 @@ class ToolsTest {
                 .contains("No page mentions it").contains("no topic");
     }
 
+    @Test
+    void aRequestNamingAFunctionCategoryListsTheWholeCategory() {
+        // Issue 37: "string" weighs every string function alike, and a ranking cut to
+        // eight kept Len and UCase but not Replace or SUBSTRING.
+        String answer = text(tools.learn(call("relix_learn", Map.of("topic", "string manipulation"))));
+
+        assertThat(answer).contains("The string functions").contains("Replace")
+                .contains("SUBSTRING").contains("Left").contains("Mid");
+        assertThat(text(tools.learn(call("relix_learn", Map.of("topic", "date arithmetic")))))
+                .contains("The datetime functions").contains("DATEADD");
+    }
+
+    @Test
+    void sqlsConversionNamesReachCast() {
+        // Issue 37: a model looked conversion up as TO_NUMBER and VALUE and found nothing.
+        String cast = text(tools.learn(call("relix_learn", Map.of("topic", "CAST"))));
+
+        for (String name : List.of("TO_NUMBER", "VALUE", "CONVERT", "PARSE")) {
+            assertThat(text(tools.learn(call("relix_learn", Map.of("topic", name)))))
+                    .as(name).isEqualTo(cast);
+        }
+    }
+
+    @Test
+    void aWordThatMerelyStartsACategoryNamesNone() {
+        assertThat(new Reference().categories("ma da str")).isEmpty();
+        assertThat(new Reference().categories("pairwise test combinations")).isEmpty();
+    }
+
+    @Test
+    void aSearchSaysHowManyMorePagesMatchThanItShows() {
+        Reference.Found found = new Reference().search("text value");
+        assertThat(found.matched()).isGreaterThan(Reference.SHOWN);
+
+        String answer = text(tools.learn(call("relix_learn", Map.of("topic", "text value"))));
+        assertThat(answer).contains((found.matched() - Reference.SHOWN) + " more pages mention it");
+    }
+
     /**
      * The keywords the primer names for the operators SQL lacks, and the one family it
      * names by its page's title, record linkage having no keyword of its own. A model reads the primer's
