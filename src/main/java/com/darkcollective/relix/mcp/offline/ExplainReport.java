@@ -1,6 +1,7 @@
 package com.darkcollective.relix.mcp.offline;
 
 import java.util.List;
+import java.util.function.Function;
 
 /**
  * How the engine would run a script.
@@ -24,11 +25,22 @@ public record ExplainReport(boolean valid, List<Finding> findings, List<QueryPla
      * {@return the report as text a model reads}
      */
     public String render() {
+        return render(file -> null);
+    }
+
+    /**
+     * {@return the report as {@link #render()} gives it, each placed finding followed by
+     * the source line it points at}
+     *
+     * @param sources the text of a finding's file, or of the script for a null file, as
+     *                for {@link Finding#render(Function)}
+     */
+    public String render(Function<String, String> sources) {
         StringBuilder out = new StringBuilder();
         if (!valid) {
             out.append("Invalid, so nothing was planned:\n");
         }
-        findings.forEach(f -> out.append(f.render()).append('\n'));
+        findings.forEach(f -> out.append(f.render(sources)).append('\n'));
         if (valid && queries.isEmpty()) {
             out.append("The script has no query statement, so there is nothing to plan. ")
                     .append("Add one: query Name; or query { expression };\n");
