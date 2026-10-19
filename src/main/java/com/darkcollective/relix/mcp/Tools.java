@@ -78,8 +78,10 @@ final class Tools {
      */
     static final String PRIMER = """
             Relix is a relational-algebra language, not SQL and not a pipe language: there is \
-            no FROM, no WHERE clause and no |>. Every operator takes its input relation last, \
-            in parentheses, and returns a relation. A script is statements, each ending in ;
+            no FROM, no WHERE clause and no |>. An operator on one relation takes it last, in \
+            parentheses: SELECT cond (R). An operator on two is written between them, with \
+            nothing in front: A JOIN B, A >< cond B, A UNION B. Each returns a relation. A \
+            script is statements, each ending in ;
 
               Orders := [
               | order_id | customer_id | amount |
@@ -103,7 +105,7 @@ final class Tools {
             the whole relation.
             SORT x DESC (R) τ; LIMIT n (R) λ; RENAME (old -> new) (R) ρ; DISTINCT (R) δ; \
             A JOIN B ⋈ joins on every shared column name; A >< A.id = B.a_id B joins on a \
-            condition written between the inputs; LJOIN, RJOIN, FJOIN (outer) and SEMI, ANTI \
+            condition written between the inputs, and no JOIN goes in front of it; LJOIN, RJOIN, FJOIN (outer) and SEMI, ANTI \
             (keep rows with, or without, a match) take a condition the same way: \
             Customers ANTI Customers.id = Orders.customer_id Orders. UNION, EXCEPT, INTERSECT.
             Predicates: = != < <= > >=, AND, OR, NOT, x IN {1, 2}, x LIKE 'A%', x IS NULL. \
