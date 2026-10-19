@@ -2,17 +2,23 @@
 
 An MCP server through which a language model validates and explains Relix scripts, runs
 them over their own inline data, and reads the language reference. The Relix engine is **not** here: it is
-`com.darkcollective.relix:relix` from Maven Central, released from
+`com.darkcollective.relix:relix` from Maven Central (its snapshot on `develop`), published from
 [relix-core](https://github.com/DarkCollective/relix-core).
 
 ## Hard rules
 
 - **Java 21** toolchain, as the engine. No preview features.
-- **The engine through its published API only.** Depend on the released jar and nothing
+- **The engine through its published API only.** Depend on the published jar and nothing
   else of Relix; use only packages its module descriptor exports. `EngineBoundaryTest`
   (jdeps) enforces it, because the MCP SDK's invalid automatic module name keeps this
-  build on the class path. A gap in the public API is fixed in relix-core and released,
+  build on the class path. A gap in the public API is fixed in relix-core and published,
   then used here. It is never worked around with internals, reflection or copied code.
+- **develop tracks the engine snapshot; a release pins a released engine.** On `develop`,
+  `relixVersion` defaults to the engine's `-SNAPSHOT`, from Central's snapshot repository,
+  so a change merged to relix-core's develop is used here before it is released. Promoting
+  to `main` sets the default to a released engine (a release or release candidate) in the
+  same PR; CI runs `engineIsReleased` on every PR into `main` and push to it, and fails on
+  a snapshot. Try a released engine on develop with `-PrelixVersion=<version>`.
 - **No magic knowledge.** This server is a reference for embedders, so it must not rely
   on engine behaviour that is not documented API: no parsing of message text, no
   internal constants such as the name the engine gives a session's script.

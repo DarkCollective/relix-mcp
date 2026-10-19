@@ -1,5 +1,8 @@
 # The gate: `./gradlew build` on every pull request and every push to main.
 #
+# develop builds against the engine's snapshot; main must pin a released engine, so a
+# pull request into main, and a push to it, also runs `engineIsReleased`.
+#
 # This repository is public, so GitHub-hosted runners cost no Actions minutes and
 # nothing here needs the CodeBuild runners the private Relix repository uses.
 name: CI
@@ -24,4 +27,7 @@ jobs:
           distribution: corretto
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v4
+      - name: A release pins a released engine
+        if: github.base_ref == 'main' || github.ref == 'refs/heads/main'
+        run: ./gradlew engineIsReleased
       - run: ./gradlew build
