@@ -565,12 +565,23 @@ final class Tools {
         return reference.page(asked).map(page -> text(brief ? Reference.brief(page)
                 + "\n\n(The syntax and one example. Ask learn for '" + asked.strip()
                 + "' without detail 'brief' for the whole page.)" : page)).orElseGet(() -> {
-            List<Reference.Hit> hits = reference.search(asked);
+            List<Reference.Category> categories = reference.categories(asked);
+            Reference.Found found = reference.search(asked);
+            List<Reference.Hit> hits = found.hits();
             StringBuilder answer = new StringBuilder("No page is called '").append(asked)
                     .append("'.");
+            for (Reference.Category category : categories) {
+                answer.append("\n\nThe ").append(category.name())
+                        .append(" functions; ask learn for one by its name:\n")
+                        .append(String.join(", ", category.functions())).append('\n');
+            }
             if (hits.isEmpty()) {
-                answer.append(" No page mentions it either.");
+                answer.append(categories.isEmpty() ? " No page mentions it either."
+                        : "\nNo page mentions it otherwise.");
             } else {
+                if (!categories.isEmpty()) {
+                    answer.append('\n');
+                }
                 answer.append(" These pages mention it, most relevant first; ask learn for ")
                         .append("one by the name in brackets:\n");
                 for (Reference.Hit hit : hits) {
@@ -581,6 +592,11 @@ final class Tools {
                     }
                 }
                 answer.append('\n');
+                if (found.matched() > hits.size()) {
+                    answer.append("\n").append(found.matched() - hits.size())
+                            .append(" more pages mention it. Ask in more exact words to ")
+                            .append("rank them, or call learn with no topic to list them all.\n");
+                }
             }
             reference.spellingsPage().ifPresent(path -> answer.append("\nFor an ASCII ")
                     .append("keyword, '").append(path).append("' gives its glyph, and the ")
