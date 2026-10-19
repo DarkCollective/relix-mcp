@@ -76,6 +76,37 @@ class ToolsTest {
     }
 
     /**
+     * The primer's TOP line, held to the engine: the form as written runs, and a tie for
+     * first fills both places, with nobody second. Three runs of a race task chose "the two
+     * best times" instead, keeping a third runner, every time without WITH TIES.
+     */
+    @Test
+    void thePrimersTopWithTiesFillsBothPlacesWithATieForFirst() {
+        String form = "TOP 2 WITH TIES t PER g (R)";
+        assertThat(Tools.PRIMER).contains(form);
+        String script = """
+                R := [
+                | g | name | t    |
+                |---|------|------|
+                | a | Hal  | 1700 |
+                | a | Ida  | 1650 |
+                | a | Jo   | 1650 |
+                | b | Ana  | 1480 |
+                | b | Ben  | 1490 |
+                | b | Cleo | 1490 |
+                | b | Dev  | 1530 |
+                ];
+                query { SORT g, name (PROJECT g, name (%s)) };
+                """.formatted(form);
+
+        String ran = text(tools.run(call("relix_run", Map.of("script", script))));
+
+        assertThat(ran).contains("| a | Ida |").contains("| a | Jo |").doesNotContain("Hal")
+                .contains("| b | Ana |").contains("| b | Ben |").contains("| b | Cleo |")
+                .doesNotContain("Dev").contains("(5 rows");
+    }
+
+    /**
      * The primer's SELECT, PROJECT and GROUP lines, held to the engine. A model expecting SQL
      * reads a column list beside SELECT as SELECT's, so each sits on its own line, and the
      * claim that an aggregate works only inside GROUP is a claim about what the engine
