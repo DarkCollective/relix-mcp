@@ -22,6 +22,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -449,8 +450,9 @@ final class Tools {
             return NOTHING_FINISHED;
         }
         return CallToolResult.builder()
-                .addTextContent(report.valid() ? report.render()
-                        : ForeignCode.lead(asked.script(), report.render() + "\n" + REVALIDATE))
+                .addTextContent(report.valid() ? report.render(sources(asked))
+                        : ForeignCode.lead(asked.script(),
+                                report.render(sources(asked)) + "\n" + REVALIDATE))
                 .structuredContent(Map.of("valid", report.valid(), "findings",
                         report.findings().stream().map(Tools::asData).toList()))
                 .build();
@@ -474,8 +476,8 @@ final class Tools {
         data.put("findings", report.findings().stream().map(Tools::asData).toList());
         data.put("queries", report.queries().stream().map(Tools::asData).toList());
         return CallToolResult.builder()
-                .addTextContent(report.valid() ? report.render()
-                        : ForeignCode.lead(asked.script(), report.render()))
+                .addTextContent(report.valid() ? report.render(sources(asked))
+                        : ForeignCode.lead(asked.script(), report.render(sources(asked))))
                 .structuredContent(data)
                 .build();
     }
@@ -494,8 +496,8 @@ final class Tools {
             return NOTHING_FINISHED;
         }
         return CallToolResult.builder()
-                .addTextContent(report.valid() ? report.render()
-                        : ForeignCode.lead(text, report.render()))
+                .addTextContent(report.valid() ? report.render(scriptOnly(text))
+                        : ForeignCode.lead(text, report.render(scriptOnly(text))))
                 .structuredContent(asData(report))
                 .build();
     }
@@ -529,12 +531,12 @@ final class Tools {
         data.put("script", text);
         data.putAll(asData(report));
         String answer = submitted
-                ? SUBMITTED + "\n\n" + fenced(text) + "\n\n" + report.render()
+                ? SUBMITTED + "\n\n" + fenced(text) + "\n\n" + report.render(scriptOnly(text))
                 : "Not submitted: " + (report.valid()
                         ? "the run was stopped before every query finished. Make the script "
                                 + "cheaper, then call 'relix_submit' again."
                         : "fix these, then call 'relix_submit' again on the fixed script.")
-                        + "\n\n" + report.render();
+                        + "\n\n" + report.render(scriptOnly(text));
         if (!report.valid()) {
             answer = ForeignCode.lead(text, answer);
         }
@@ -542,6 +544,19 @@ final class Tools {
                 .addTextContent(answer)
                 .structuredContent(data)
                 .build();
+    }
+
+    /**
+     * The text each finding of an offline request points into: the script, or an imported
+     * file the caller sent, so a finding is shown with its source line.
+     */
+    private static Function<String, String> sources(OfflineRequest asked) {
+        return file -> file == null ? asked.script() : asked.files().get(file);
+    }
+
+    /** The same for a script run on its own, which imports nothing. */
+    private static Function<String, String> scriptOnly(String script) {
+        return file -> file == null ? script : null;
     }
 
     /** A script as a fenced code block, its fence longer than any run of backticks in it. */
