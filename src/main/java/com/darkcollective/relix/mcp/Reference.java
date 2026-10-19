@@ -206,6 +206,59 @@ final class Reference {
     }
 
     /**
+     * What a search found.
+     *
+     * @param hits    the best matches, most relevant first
+     * @param matched how many pages matched in all, of which {@code hits} are the first
+     */
+    record Found(List<Hit> hits, int matched) {
+    }
+
+    /** How many matches a search shows. */
+    static final int SHOWN = 8;
+
+    /**
+     * A function category, and the name of every function in it.
+     *
+     * @param name      the category, as the function's signature gives it
+     * @param functions its functions' names, sorted
+     */
+    record Category(String name, List<String> functions) {
+    }
+
+    /**
+     * {@return the function categories a request's words name}
+     *
+     * <p>A request such as "string manipulation" names a category, not a task, and every
+     * function in it matches alike, so a ranking would keep an arbitrary few. The
+     * category's whole listing answers it instead. A word names a category when either
+     * starts the other and the shorter has four letters or more, so {@code strings},
+     * {@code date} and {@code mathematical} find {@code string}, {@code datetime} and
+     * {@code math}.
+     *
+     * @param request what was asked for, in any words
+     */
+    List<Category> categories(String request) {
+        List<String> words = words(request);
+        Map<String, List<FunctionPage>> byCategory = new TreeMap<>(functions.stream()
+                .collect(Collectors.groupingBy(FunctionPage::category)));
+        List<Category> named = new ArrayList<>();
+        byCategory.forEach((category, inCategory) -> {
+            String folded = fold(category);
+            if (words.stream().anyMatch(word -> names(word, folded))) {
+                named.add(new Category(category, inCategory.stream().map(FunctionPage::name)
+                        .distinct().sorted(String.CASE_INSENSITIVE_ORDER).toList()));
+            }
+        });
+        return named;
+    }
+
+    private static boolean names(String word, String category) {
+        String shorter = word.length() < category.length() ? word : category;
+        return shorter.length() >= 4 && (category.startsWith(word) || word.startsWith(category));
+    }
+
+    /**
      * Searches every page's text for the words of a request, for a lookup that named no
      * page exactly.
      *
@@ -218,12 +271,13 @@ final class Reference {
      * dropped so singular and plural meet.
      *
      * @param request what was asked for, in any words
-     * @return the best matches, most relevant first; empty when no page has any of them
+     * @return the best {@value #SHOWN} matches, most relevant first, and how many pages
+     *         matched; no hits when no page has any of the words
      */
-    List<Hit> search(String request) {
+    Found search(String request) {
         List<String> words = words(request);
         if (words.isEmpty()) {
-            return List.of();
+            return new Found(List.of(), 0);
         }
         // A word in few pages says more about which page is wanted than one in many:
         // "path" picks out a handful of pages, "between" almost all of them.
@@ -253,12 +307,13 @@ final class Reference {
                 scored.add(new Scored(page, score, rarest));
             }
         }
-        return scored.stream()
+        List<Hit> hits = scored.stream()
                 .sorted(java.util.Comparator.comparingDouble(Scored::score).reversed())
-                .limit(8)
+                .limit(SHOWN)
                 .map(s -> new Hit(s.page().title(), s.page().where(), s.page().summary(),
                         excerpt(s.page().markdown(), s.rarest())))
                 .toList();
+        return new Found(hits, scored.size());
     }
 
     /**
