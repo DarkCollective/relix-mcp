@@ -484,6 +484,61 @@ class ToolsTest {
                 .contains("No page mentions it").contains("no topic");
     }
 
+    /** A script whose eighth line uses SQL's SELECT list, below an inline table. */
+    private static final String SQL_SELECT_ON_LINE_8 = """
+            T := [
+            | id | name |
+            |----|------|
+            | 1  | Ann  |
+            ];
+            Kept := { SELECT id > 0 (T) };
+            -- the next line is the mistake
+            Named := { SELECT id, name (Kept) };
+            query Named;
+            """;
+
+    /** The line and caret a finding at line 8, column 21 (the comma) is shown with. */
+    private static final String EXCERPT = "\n  Named := { SELECT id, name (Kept) };\n"
+            + "  " + " ".repeat(20) + "^";
+
+    @Test
+    void aFindingShowsTheLineItPointsAtWithACaret() {
+        // gpt-oss read 'script:31:31', could not tell which of its SELECTs was on line 31,
+        // and rewrote a different one four times (issue 38).
+        String validated = text(tools.validate(call("relix_validate",
+                Map.of("script", SQL_SELECT_ON_LINE_8))));
+
+        assertThat(validated).contains("script:8:21: error:").contains(EXCERPT);
+        assertThat(text(tools.run(call("relix_run", Map.of("script", SQL_SELECT_ON_LINE_8)))))
+                .contains(EXCERPT);
+        assertThat(text(tools.explain(call("relix_explain", Map.of("script", SQL_SELECT_ON_LINE_8)))))
+                .contains(EXCERPT);
+        assertThat(text(tools.submit(call("relix_submit", Map.of("script", SQL_SELECT_ON_LINE_8)))))
+                .contains(EXCERPT);
+    }
+
+    @Test
+    void aFindingInAnImportedFileShowsThatFilesLine() {
+        Map<String, Object> args = new HashMap<>();
+        args.put("script", "import \"lib/orders.relix\";\nquery { Orders };");
+        args.put("files", Map.of("lib/orders.relix", "-- orders\nOrders := { PROJECT x (Nowhere) };"));
+
+        String validated = text(tools.validate(call("relix_validate", args)));
+
+        assertThat(validated).contains("lib/orders.relix:2:").contains("Nowhere")
+                .contains("\n  Orders := { PROJECT x (Nowhere) };\n")
+                .doesNotContain("  import \"lib/orders.relix\";");
+    }
+
+    @Test
+    void theStructuredFindingIsUnchangedByTheExcerpt() {
+        CallToolResult result = tools.validate(call("relix_validate",
+                Map.of("script", SQL_SELECT_ON_LINE_8)));
+
+        assertThat(result.structuredContent().toString()).contains("line=8").contains("column=21")
+                .doesNotContain("^");
+    }
+
     @Test
     void aRequestNamingAFunctionCategoryListsTheWholeCategory() {
         // Issue 37: "string" weighs every string function alike, and a ranking cut to

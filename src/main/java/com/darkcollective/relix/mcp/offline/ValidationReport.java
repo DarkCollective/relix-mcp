@@ -1,6 +1,7 @@
 package com.darkcollective.relix.mcp.offline;
 
 import java.util.List;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -23,6 +24,17 @@ public record ValidationReport(boolean valid, List<Finding> findings) {
      * {@return the report as text a model reads: a verdict line, then one line per finding}
      */
     public String render() {
+        return render(file -> null);
+    }
+
+    /**
+     * {@return the report as {@link #render()} gives it, each placed finding followed by
+     * the source line it points at}
+     *
+     * @param sources the text of a finding's file, or of the script for a null file, as
+     *                for {@link Finding#render(Function)}
+     */
+    public String render(Function<String, String> sources) {
         long errors = findings.stream().filter(Finding::isError).count();
         long warnings = findings.size() - errors;
         String verdict = valid
@@ -32,7 +44,7 @@ public record ValidationReport(boolean valid, List<Finding> findings) {
         if (findings.isEmpty()) {
             return verdict;
         }
-        return verdict + "\n" + findings.stream().map(Finding::render)
+        return verdict + "\n" + findings.stream().map(f -> f.render(sources))
                 .collect(Collectors.joining("\n"));
     }
 

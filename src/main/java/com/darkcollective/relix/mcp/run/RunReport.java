@@ -3,6 +3,7 @@ package com.darkcollective.relix.mcp.run;
 import com.darkcollective.relix.mcp.offline.Finding;
 
 import java.util.List;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -43,11 +44,22 @@ public record RunReport(boolean valid, List<Finding> findings, List<QueryResult>
      * findings that stopped the script}
      */
     public String render() {
+        return render(file -> null);
+    }
+
+    /**
+     * {@return the report as {@link #render()} gives it, each placed finding followed by
+     * the source line it points at}
+     *
+     * @param sources the text of a finding's file, or of the script for a null file, as
+     *                for {@link Finding#render(Function)}
+     */
+    public String render(Function<String, String> sources) {
         StringBuilder out = new StringBuilder();
         if (!valid) {
             out.append("Invalid, so nothing ran:\n");
         }
-        findings.forEach(f -> out.append(f.render()).append('\n'));
+        findings.forEach(f -> out.append(f.render(sources)).append('\n'));
         if (valid && !stopped && results.isEmpty()) {
             out.append("The script has no query statement, so there is nothing to show. ")
                     .append("Add one: query Name; or query { expression };\n");
