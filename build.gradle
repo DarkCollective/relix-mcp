@@ -16,8 +16,18 @@ plugins {
 group = 'com.darkcollective.relix'
 version = '1.0.0-rc1'
 
+ext.relixVersion = (findProperty('relixVersion') ?: '1.0.0-rc11') as String
+
 repositories {
     mavenCentral()
+    // Only to try an engine change before it is released: -PrelixVersion=1.0.0-SNAPSHOT.
+    // A build left at the default never looks here.
+    if (relixVersion.endsWith('-SNAPSHOT')) {
+        maven {
+            url = 'https://central.sonatype.com/repository/maven-snapshots/'
+            mavenContent { snapshotsOnly() }
+        }
+    }
 }
 
 java {
@@ -26,8 +36,6 @@ java {
         languageVersion = JavaLanguageVersion.of(21)
     }
 }
-
-ext.relixVersion = (findProperty('relixVersion') ?: '1.0.0-rc11') as String
 
 dependencies {
     implementation "com.darkcollective.relix:relix:${relixVersion}"
