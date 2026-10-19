@@ -101,8 +101,8 @@ final class Reference {
     }
 
     /**
-     * A page cut to what writing a script from it needs first: its name, its syntax, and
-     * its first example.
+     * A page cut to what writing a script from it needs first: its name, its syntax, its
+     * first example, and the SQL names it answers to.
      *
      * <p>Every page, language and function alike, follows the reference's published
      * template ({@code docs/reference/.template.md} in relix-docs), whose sections are
@@ -128,6 +128,13 @@ final class Reference {
         if (!example.isEmpty()) {
             out.append("\n# Example:\n");
             example.forEach(line -> out.append(line).append('\n'));
+        }
+        // A page found by its SQL name is titled by its own: LOWER finds LCase. Without
+        // this section a brief page reads as though the name asked for does not exist.
+        List<String> sqlNames = section(lines, "# SQL names:");
+        if (!sqlNames.isEmpty()) {
+            out.append('\n');
+            sqlNames.forEach(line -> out.append(line).append('\n'));
         }
         return out.toString().strip();
     }

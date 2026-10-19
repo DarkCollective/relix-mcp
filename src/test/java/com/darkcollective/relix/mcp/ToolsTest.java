@@ -413,6 +413,17 @@ class ToolsTest {
     }
 
     @Test
+    void aBriefPageKeepsTheSqlNamesItAnswersTo() {
+        // gpt-oss asked for 'lower', got a brief page titled LCase, and concluded LOWER
+        // did not exist: the section saying it does had been cut.
+        String brief = text(tools.learn(call("relix_learn", Map.of("topic", "LOWER", "detail", "brief"))));
+
+        assertThat(brief).startsWith("# Name: LCase").contains("# SQL names:")
+                .contains("`LOWER` is the same function").doesNotContain("# Description:")
+                .doesNotContain("# See Also:");
+    }
+
+    @Test
     void everyPageHasABriefForm() {
         List<String> pages = new ArrayList<>();
         RelixDocs.referencePages().forEach(p -> pages.add(p.path()));
