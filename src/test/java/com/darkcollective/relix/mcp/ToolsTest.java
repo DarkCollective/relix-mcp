@@ -294,8 +294,11 @@ class ToolsTest {
         CallToolResult result = tools.submit(call("relix_submit", Map.of("script", script)));
 
         assertThat(result.isError()).isNotEqualTo(Boolean.TRUE);
+        // The same rows relix_run shows, without its reminder to submit them.
+        String ran = text(tools.run(call("relix_run", Map.of("script", script))))
+                .replace("\n\n" + Tools.SUBMIT_REMINDER, "");
         assertThat(text(result)).isEqualTo(Tools.SUBMITTED + "\n\n```relix\n" + script.strip()
-                + "\n```\n\n" + text(tools.run(call("relix_run", Map.of("script", script)))));
+                + "\n```\n\n" + ran);
         Map<?, ?> data = (Map<?, ?>) result.structuredContent();
         assertThat(data.get("submitted")).isEqualTo(true);
         assertThat(data.get("script")).isEqualTo(script);
@@ -513,6 +516,25 @@ class ToolsTest {
     void aTopicNoPageMentionsSaysSo() {
         assertThat(text(tools.learn(call("relix_learn", Map.of("topic", "zzzzqqq")))))
                 .contains("No page mentions it").contains("no topic");
+    }
+
+    @Test
+    void aSuccessfulRunEndsBySayingToSubmitIt() {
+        // Issue 41: a model ran the right script, got the right rows, and wrote them in its
+        // reply without calling relix_submit, so its answer never became one.
+        String table = "T := [\n| id | n |\n|----|---|\n| 1  | 0 |\n];\n";
+
+        assertThat(text(tools.run(call("relix_run", Map.of("script", table + "query { T };")))))
+                .endsWith("\n\n" + Tools.SUBMIT_REMINDER);
+        assertThat(text(tools.run(call("relix_run", Map.of("script", table + "query { Nowhere };")))))
+                .doesNotContain(Tools.SUBMIT_REMINDER);
+        assertThat(text(tools.run(call("relix_run", Map.of("script", table + "Kept := { T };")))))
+                .contains("no query statement").doesNotContain(Tools.SUBMIT_REMINDER);
+        assertThat(text(tools.run(call("relix_run",
+                Map.of("script", table + "query { PROJECT id / n -> r (T) };")))))
+                .contains("Failed:").doesNotContain(Tools.SUBMIT_REMINDER);
+        assertThat(text(tools.submit(call("relix_submit", Map.of("script", table + "query { T };")))))
+                .doesNotContain(Tools.SUBMIT_REMINDER);
     }
 
     /** A script whose eighth line uses SQL's SELECT list, below an inline table. */

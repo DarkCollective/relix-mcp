@@ -499,11 +499,27 @@ final class Tools {
         if (report.stopped() && report.results().isEmpty()) {
             return NOTHING_FINISHED;
         }
+        String rendered = report.render(scriptOnly(text));
         return CallToolResult.builder()
-                .addTextContent(report.valid() ? report.render(scriptOnly(text))
-                        : ForeignCode.lead(text, report.render(scriptOnly(text))))
+                .addTextContent(!report.valid() ? ForeignCode.lead(text, rendered)
+                        : ranToTheEnd(report) ? rendered + "\n\n" + SUBMIT_REMINDER : rendered)
                 .structuredContent(asData(report))
                 .build();
+    }
+
+    /**
+     * What a successful run ends with. A model reads a run's rows, finds them right, and
+     * writes them in its reply, never calling relix_submit: the description says to, but
+     * not at the moment it decides to stop, which is here.
+     */
+    static final String SUBMIT_REMINDER = "If these are the rows the question asks for, call "
+            + "relix_submit with this same script: a script or rows written in your reply are "
+            + "not an answer.";
+
+    /** Whether every query ran and returned its rows, so they could be an answer. */
+    private static boolean ranToTheEnd(RunReport report) {
+        return report.valid() && !report.stopped() && !report.results().isEmpty()
+                && report.results().stream().allMatch(QueryResult::ran);
     }
 
     CallToolResult submit(CallToolRequest request) {
