@@ -1,9 +1,11 @@
 package com.darkcollective.relix.mcp;
 
+import com.darkcollective.relix.docs.ReferenceLookup;
 import com.darkcollective.relix.docs.ReferencePage;
 import com.darkcollective.relix.docs.RelixDocs;
 import com.darkcollective.relix.embed.Relix;
 import com.darkcollective.relix.function.AggregateFunction;
+import com.darkcollective.relix.function.FunctionCatalog;
 import com.darkcollective.relix.function.FunctionLibrary;
 import com.darkcollective.relix.function.ScalarFunction;
 
@@ -76,8 +78,15 @@ final class Reference {
     }
 
     /**
-     * Finds the page a topic names: a language page by path, lookup key or title, then a
-     * function by name.
+     * relix-docs' own index of what a user types: the language pages and every installed
+     * function's page, with the keys relix-docs gives them (SQL's {@code case} finds
+     * {@code Switch}). Built from the libraries the engine discovers, as {@link #functions}.
+     */
+    private final ReferenceLookup lookup = ReferenceLookup.of(FunctionCatalog.discover());
+
+    /**
+     * Finds the page a topic names: a language page by path, lookup key or title, then any
+     * page relix-docs' {@link ReferenceLookup} keys by the topic, then a function by name.
      *
      * @param topic a glyph, keyword, name, function name or path, in any case
      * @return the page's markdown, when one matches
@@ -94,10 +103,10 @@ final class Reference {
         if (language.isPresent()) {
             return language;
         }
-        return functions.stream()
+        return lookup.lookup(wanted).or(() -> functions.stream()
                 .filter(f -> f.name().equalsIgnoreCase(wanted))
                 .findFirst()
-                .flatMap(f -> f.library().documentation(f.docKey()));
+                .flatMap(f -> f.library().documentation(f.docKey())));
     }
 
     /**
@@ -353,8 +362,10 @@ final class Reference {
             String markdown = function.library().documentation(function.docKey()).orElse("");
             String summary = markdown.lines().findFirst().orElse(function.name())
                     .replaceFirst("^#\\s*Name:\\s*", "");
+            // The summary is the page's own words for what it does ("inline if / conditional
+            // value"), weighed as a language page's summary is.
             corpus.add(new Page(function.name(), function.name(), summary, markdown,
-                    fold(function.name() + " " + function.category()), fold(markdown)));
+                    fold(function.name() + " " + function.category() + " " + summary), fold(markdown)));
         }
         return List.copyOf(corpus);
     }
