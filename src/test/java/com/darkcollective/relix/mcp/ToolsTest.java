@@ -495,6 +495,27 @@ class ToolsTest {
     }
 
     @Test
+    void sqlsConditionalKeywordsFindTheConditionalFunctions() {
+        // Issue 44: relix-docs keys Switch by case and case when, and IIf by if (relix-core
+        // #189); looking a topic up through its ReferenceLookup reaches them directly.
+        String learnt = text(tools.learn(call("relix_learn", Map.of("topic", "CASE"))));
+        assertThat(learnt).startsWith("# Name: Switch");
+        assertThat(text(tools.learn(call("relix_learn", Map.of("topic", "case when")))))
+                .isEqualTo(learnt);
+        assertThat(text(tools.learn(call("relix_learn", Map.of("topic", "IF")))))
+                .startsWith("# Name: IIf");
+    }
+
+    @Test
+    void aFunctionIsFoundByItsOwnSummary() {
+        // Issue 42: a function page's summary was not weighed as a heading, so "conditional
+        // value", IIf's own subtitle, ranked FILTER first.
+        assertThat(firstHit("conditional value")).isEqualTo("IIf");
+        assertThat(firstHit("inline if")).isEqualTo("IIf");
+        assertThat(firstHit("multi-branch conditional")).isEqualTo("Switch");
+    }
+
+    @Test
     void anAsciiKeywordLandsOnItsPageNotTheQuantifier() {
         // "anti" is inside "quantifier"; asking for the ASCII keyword ANTI must land on
         // the anti join. The engine registers each operator's ASCII spelling as a page
