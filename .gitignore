@@ -3,3 +3,6 @@ build/
 .idea/
 *.iml
 .DS_Store
+
+# Model eval output (tools/model-eval)
+tools/model-eval/runs/
