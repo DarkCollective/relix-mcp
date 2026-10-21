@@ -45,6 +45,18 @@ class InMemoryDataStoreTest {
     }
 
     @Test
+    void keysListsAnOwnersLiveKeysOnly() {
+        store.put("alice", "k1", DATA);
+        clock.advance(Duration.ofMinutes(30));
+        store.put("alice", "k2", DATA);
+        store.put("bob", "k3", DATA);
+        clock.advance(Duration.ofMinutes(45));
+
+        assertThat(store.keys("alice")).containsExactly("k2");
+        assertThat(store.keys("bob")).containsExactly("k3");
+    }
+
+    @Test
     void removingAnEntryReleasesItsPlace() {
         store.put("alice", "k1", DATA);
         store.put("alice", "k2", DATA);

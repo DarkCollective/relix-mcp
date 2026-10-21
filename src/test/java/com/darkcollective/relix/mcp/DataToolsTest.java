@@ -156,6 +156,17 @@ class DataToolsTest {
     }
 
     @Test
+    void aMistypedKeyIsAnsweredWithTheKeyItWasMeantToBe() {
+        String key = load(ORDERS);
+        String typo = (key.charAt(0) == 'a' ? "b" : "a") + key.substring(1);
+
+        CallToolResult run = tools.run(call("relix_run", Map.of("data", typo, "script", "query { Orders };")));
+
+        assertThat(run.isError()).isTrue();
+        assertThat(text(run)).contains("this caller holds '" + key + "'");
+    }
+
+    @Test
     void aShortenedKeyIsToldToBeSentInFull() {
         String key = load(ORDERS);
 

@@ -142,7 +142,7 @@ public final class DataKeys {
         if (key != null) {
             Optional<StoredData> stored = store.get(owner, key);
             if (stored.isEmpty()) {
-                return LoadReport.refused(notFound(key));
+                return LoadReport.refused(missing(owner, key));
             }
             if (stored.get().readOnly()) {
                 if (adding) {
@@ -260,6 +260,55 @@ public final class DataKeys {
      */
     public boolean unload(String owner, String key) {
         return store.remove(Objects.requireNonNull(owner, "owner"), Objects.requireNonNull(key, "key"));
+    }
+
+    /**
+     * What a call naming a key its caller does not hold is told, with the key it most
+     * likely meant.
+     *
+     * <p>A model copies a 32-character key by retyping it, and sometimes changes a character
+     * or two. When exactly one key the caller holds is that close, the answer names it:
+     * the lookup is the caller's own, so it shows them only a key they already hold.
+     *
+     * @param owner whose keys to look among
+     * @param key   the key named
+     * @return the message
+     */
+    public String missing(String owner, String key) {
+        String message = notFound(key);
+        if (!KEY_FORM.matcher(key).matches()) {
+            return message;
+        }
+        List<String> close = store.keys(owner).stream()
+                .filter(held -> distance(held, key) <= CLOSE).toList();
+        return close.size() != 1 ? message : "No data is held under the key '" + key
+                + "', but this caller holds '" + close.getFirst() + "', which differs from it "
+                + "by " + distance(close.getFirst(), key) + " character"
+                + (distance(close.getFirst(), key) == 1 ? "" : "s") + ". If you copied the key, "
+                + "use that one, exactly as it is written here.";
+    }
+
+    /** How many characters a key may differ by from one held and still be offered in its place. */
+    static final int CLOSE = 3;
+
+    /** How many single-character edits turn one string into the other. */
+    static int distance(String a, String b) {
+        int[] previous = new int[b.length() + 1];
+        int[] current = new int[b.length() + 1];
+        for (int j = 0; j <= b.length(); j++) {
+            previous[j] = j;
+        }
+        for (int i = 1; i <= a.length(); i++) {
+            current[0] = i;
+            for (int j = 1; j <= b.length(); j++) {
+                int replace = previous[j - 1] + (a.charAt(i - 1) == b.charAt(j - 1) ? 0 : 1);
+                current[j] = Math.min(replace, Math.min(previous[j], current[j - 1]) + 1);
+            }
+            int[] swap = previous;
+            previous = current;
+            current = swap;
+        }
+        return previous[b.length()];
     }
 
     /**

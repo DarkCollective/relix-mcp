@@ -1,6 +1,7 @@
 package com.darkcollective.relix.mcp.data;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -44,6 +45,14 @@ public interface DataStore {
      * @param owner whose keys to count
      */
     int active(String owner);
+
+    /**
+     * {@return the keys {@code owner} holds that have not expired}, without what they hold
+     * and without starting their time to live again
+     *
+     * @param owner whose keys to list
+     */
+    List<String> keys(String owner);
 
     /**
      * Releases {@code key} before it expires.
