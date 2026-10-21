@@ -1,5 +1,6 @@
 package com.darkcollective.relix.mcp;
 
+import com.darkcollective.relix.mcp.http.Authenticator;
 import io.modelcontextprotocol.common.McpTransportContext;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
@@ -8,6 +9,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -83,6 +85,16 @@ public final class Deadline {
     }
 
     /**
+     * {@return a transport context carrying this deadline and the request's owner}
+     *
+     * @param owner whose loaded data the request may read, or empty for none
+     */
+    public McpTransportContext context(Optional<String> owner) {
+        return owner.map(o -> McpTransportContext.create(Map.of(KEY, this, Authenticator.OWNER, o)))
+                .orElseGet(this::context);
+    }
+
+    /**
      * {@return how long the call was allowed, from when the deadline was set}
      */
     public Duration limit() {
@@ -100,10 +112,12 @@ public final class Deadline {
      */
     static CallToolResult call(Tools.Definition tool, CallToolRequest request,
                                McpTransportContext context) {
+        String owner = context != null && context.get(Authenticator.OWNER) instanceof String o
+                ? o : null;
         if (context != null && context.get(KEY) instanceof Deadline deadline) {
-            return deadline.call(tool, request);
+            return deadline.call(tool, request, owner);
         }
-        return tool.call().apply(request, () -> false);
+        return tool.call().apply(request, owner, () -> false);
     }
 
     /**
@@ -115,12 +129,25 @@ public final class Deadline {
      *         call was stopped
      */
     CallToolResult call(Tools.Definition tool, CallToolRequest request) {
+        return call(tool, request, (String) null);
+    }
+
+    /**
+     * Answers {@code request} from {@code owner} with {@code tool} by this deadline.
+     *
+     * @param tool    the tool called
+     * @param request the call
+     * @param owner   whose loaded data the call may read, or null for none
+     * @return the tool's result, or, if the deadline passed, what finished and that the
+     *         call was stopped
+     */
+    CallToolResult call(Tools.Definition tool, CallToolRequest request, String owner) {
         Objects.requireNonNull(tool, "tool");
         AtomicBoolean stopped = new AtomicBoolean();
         CompletableFuture<CallToolResult> answer = new CompletableFuture<>();
         Thread worker = Thread.ofVirtual().name("relix-call-" + tool.tool().name()).start(() -> {
             try {
-                answer.complete(tool.call().apply(request, stopped::get));
+                answer.complete(tool.call().apply(request, owner, stopped::get));
             } catch (Throwable t) {
                 answer.completeExceptionally(t);
             }

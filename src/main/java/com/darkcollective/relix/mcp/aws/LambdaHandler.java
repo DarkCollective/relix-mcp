@@ -150,6 +150,9 @@ public final class LambdaHandler implements RequestStreamHandler {
         // No Origin or Host check: there is no local name to rebind, and the key, which a
         // browser does not send across origins unasked, is the check.
         this.transport = new StatelessHttpTransport(JSON, ServerTransportSecurityValidator.NOOP);
+        // No relix_load yet: one instance's memory is not the next request's, so a key held
+        // in it would be found only some of the time. It waits for a store the instances
+        // share (DynamoDB, relix-mcp#48).
         Main.statelessServer(transport, runner);
     }
 
@@ -218,7 +221,8 @@ public final class LambdaHandler implements RequestStreamHandler {
         String method = event.get("requestContext") instanceof Map<?, ?> request
                 && request.get("http") instanceof Map<?, ?> http
                 && http.get("method") instanceof String m ? m : "";
-        return transport.handle(method, headers, body(event), deadline.context());
+        return transport.handle(method, headers, body(event),
+                deadline.context(authenticator.owner(headers)));
     }
 
     /**

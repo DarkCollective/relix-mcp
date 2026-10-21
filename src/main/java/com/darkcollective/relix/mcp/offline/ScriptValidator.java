@@ -9,6 +9,7 @@ import com.darkcollective.relix.lang.ast.SourceDeclaration;
 import com.darkcollective.relix.lang.ast.Statement;
 import com.darkcollective.relix.lang.ast.source.HttpSourceConfig;
 import com.darkcollective.relix.lang.ast.source.JsonFileSourceConfig;
+import com.darkcollective.relix.mcp.data.LoadedData;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -46,14 +47,47 @@ public final class ScriptValidator {
      */
     public ValidationReport validate(String script, Map<String, String> files,
                                      CallerCatalog catalog) {
+        return validate(script, files, catalog, LoadedData.NONE);
+    }
+
+    /**
+     * Validates a script over loaded data.
+     *
+     * <p>The data is defined in the session as statements, and the script checked on its
+     * own, so its findings are on its own lines. A declaration in it of a loaded table is
+     * left out, with a warning saying so. The data's own warnings are left out too:
+     * {@code relix_load} reported them, and a result over the data says how many there are.
+     *
+     * @param script  the script's text; must not be null
+     * @param files   the text of every file it imports, as for
+     *                {@link #validate(String, Map, CallerCatalog)}
+     * @param catalog the tables of the connections it reads; must not be null
+     * @param data    the tables the script reads without declaring; {@link LoadedData#NONE}
+     *                for none
+     * @return what was found
+     */
+    public ValidationReport validate(String script, Map<String, String> files,
+                                     CallerCatalog catalog, LoadedData data) {
         Objects.requireNonNull(script, "script");
+        Objects.requireNonNull(data, "data");
         ScriptFiles imports = ScriptFiles.of(files);
         List<Finding> findings = new ArrayList<>(syntaxErrors(imports));
         if (!findings.isEmpty()) {
             return new ValidationReport(false, findings);
         }
+        LoadedData.Prepared prepared = data.prepare(script);
+        findings.addAll(prepared.ignored());
         try (Relix relix = OfflineSession.open(imports, catalog)) {
-            for (Diagnostic diagnostic : relix.validate(script)) {
+            data.define(relix);
+            List<Diagnostic> diagnostics = prepared.script() != null
+                    ? relix.validate(prepared.script()) : relix.validate(script);
+            for (Diagnostic diagnostic : diagnostics) {
+                if (data.isAbout(diagnostic)) {
+                    if (diagnostic.isError()) {
+                        findings.add(Finding.of(diagnostic, LoadedData.LABEL::equals));
+                    }
+                    continue;
+                }
                 // A location in a file the caller sent names that file; anything else is the
                 // script itself, however the engine chose to label it.
                 findings.add(Finding.of(diagnostic,

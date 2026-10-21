@@ -167,6 +167,20 @@ class FatJarTest {
     }
 
     @Test
+    void loadedTablesAreReadByTheirKey() throws Exception {
+        String loaded = call("relix_load", """
+                {"tables":"Orders := [\\n| id | amount |\\n|----|--------|\\n| 1 | 120 |\\n| 2 | 50 |\\n];"}""");
+        Matcher key = Pattern.compile("\"key\":\"([0-9a-f]{32})\"").matcher(loaded);
+        assertThat(key.find()).as(loaded).isTrue();
+
+        String body = call("relix_run", "{\"data\":\"" + key.group(1)
+                + "\",\"script\":\"query { SELECT amount > 100 (Orders) };\"}");
+
+        assertThat(body).contains("| 120 ").doesNotContain("| 50 ");
+        assertThat(call("relix_unload", "{\"key\":\"" + key.group(1) + "\"}")).contains("Released");
+    }
+
+    @Test
     void explainRendersSqlForAPostgresConnection() throws Exception {
         String body = call("relix_explain", """
                 {"script":"connection wh from jdbc { url: \\"jdbc:postgresql://db.invalid/wh\\" };\\n\

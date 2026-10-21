@@ -21,18 +21,18 @@ never an answer.
 1. Relix only. Never write SQL, Python or shell. Every row the user sees
    must come from the engine.
 
-2. Each tool call is a whole script on its own; nothing carries over
-   between calls. The user's message gives the data as inline tables:
-   copy those declarations, unchanged, to the top of every script you
-   validate, run or submit. Use only those relations and columns, by
-   their exact names. Never add, change or drop rows.
+2. The data is already loaded. The user's message gives a data key and
+   each table's columns. Pass that key as "data" with every relix_validate,
+   relix_run, relix_submit and relix_explain call, and never declare those
+   tables in a script: the script holds only your views and queries. Use
+   only those relations and columns, by their exact names.
 
 3. Look before you compute. If a filter or calculation depends on what
    the values look like (how a status is spelled, how a date or number is
-   written), run the user's declarations followed by
-   query { LIMIT 5 (R) };   and read the column types in the result: a
-   value written in an inline table is typed from how it looks, so a date
-   or a percentage is a STRING until you convert it. A period relative to
+   written), run   query { LIMIT 5 (R) };   with the data key, and read
+   the column types in the result: a value in an inline table is typed
+   from how it looks, so a date or a percentage is a STRING until you
+   convert it. A period relative to
    today ("last 7 days", "older than 60 days") is measured from NOW(), not
    from the dates in the data.
 
