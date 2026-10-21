@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.regex.Pattern;
 
 /**
  * Loads data under a key, and finds it again: what {@code relix_load} and
@@ -185,11 +186,13 @@ public final class DataKeys {
             // What the key held and this load does not replace, then this load as it was
             // sent: a new key holds the caller's text exactly, so its findings are on the
             // caller's own lines.
+            // A name in any case is the same table: names are case-insensitive.
             Map<String, String> kept = new LinkedHashMap<>(held.declarations());
             for (String name : added.names()) {
-                if (kept.remove(name) != null) {
-                    replaced.add(name);
-                }
+                kept.keySet().stream().filter(name::equalsIgnoreCase).findFirst().ifPresent(old -> {
+                    kept.remove(old);
+                    replaced.add(old);
+                });
             }
             text = kept.isEmpty() ? tables
                     : String.join("\n\n", kept.values()) + "\n\n" + tables.strip() + "\n";
@@ -265,13 +268,24 @@ public final class DataKeys {
      * @param key the key named
      */
     public static String notFound(String key) {
+        if (!KEY_FORM.matcher(key).matches()) {
+            return "'" + key + "' is not a whole data key: a data key is " + KEY_HEX_DIGITS
+                    + " hexadecimal characters, exactly as 'relix_load' gave it. Send it in "
+                    + "full, not shortened.";
+        }
         return "No data is held under the key '" + key + "' for this caller: it was never "
                 + "loaded, was unloaded, or expired an hour after it was last used. Load the "
                 + "tables again with 'relix_load'.";
     }
 
+    /** How many hexadecimal digits a data key has: 128 bits. */
+    static final int KEY_HEX_DIGITS = 32;
+
+    /** What every data key {@link #newKey()} makes looks like. */
+    private static final Pattern KEY_FORM = Pattern.compile("[0-9a-f]{" + KEY_HEX_DIGITS + "}");
+
     private static String newKey() {
-        byte[] bytes = new byte[16];
+        byte[] bytes = new byte[KEY_HEX_DIGITS / 2];
         RANDOM.nextBytes(bytes);
         return HexFormat.of().formatHex(bytes);
     }

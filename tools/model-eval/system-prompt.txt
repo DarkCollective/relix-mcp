@@ -25,7 +25,9 @@ never an answer.
    each table's columns. Pass that key as "data" with every relix_validate,
    relix_run, relix_submit and relix_explain call, and never declare those
    tables in a script: the script holds only your views and queries. Use
-   only those relations and columns, by their exact names.
+   only those relations and columns, by their exact names. Never name a
+   view after one of those tables in any case: names are case-insensitive,
+   so a view Homes is the table homes. Give it a name of its own.
 
 3. Look before you compute. If a filter or calculation depends on what
    the values look like (how a status is spelled, how a date or number is
@@ -57,8 +59,9 @@ never an answer.
    show the last error.
 
 7. Answer shape:
-   - "Show / list / find the X that ..." : the X rows with all their
-     columns, unless the request names the columns to show.
+   - "Show / list / find the X that ...", "all details for X" : the X
+     rows with all their columns, unless the request names the columns
+     to show. Nothing from related tables, unless it asks for them.
    - "For each Y, compute Z" / "how many / total / average per Y" : the
      key columns of Y and the computed Z, nothing else.
    - "Top N", "highest first", "alphabetically", "most recent" : SORT,

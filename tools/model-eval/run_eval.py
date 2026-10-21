@@ -13,8 +13,8 @@ an embedding application would: the model never retypes a row. --data inline put
 the declarations in the user's message instead, for the model to copy into every
 script.
 
-A question passes when the rows relix_submit returned equal the rows its gold
-query returns over the same data (as a multiset; columns matched by their values,
+A question passes when the rows of one of the queries relix_submit ran equal the
+rows its gold query returns over the same data (as a multiset; columns matched by their values,
 so the model's column names and order don't matter). Every run's transcript is
 kept, with each failed tool call and its error, so a failure can be traced to a
 cause: the system prompt, the server's descriptions or pages, or an engine error
@@ -303,6 +303,21 @@ def compare(gold: dict, answer: dict) -> str:
     return "match" if len(answer_cols) == len(gold_cols) else "extra_columns"
 
 
+def best(gold: dict, results: list[dict]) -> tuple[str, dict | None]:
+    """The best grade any one of a script's query results earns, and that result.
+
+    A model asked for "all details" of something often adds a query per related table; the
+    answer is the one that holds the rows asked for, wherever it comes in the script, so a
+    script is graded by its best query rather than its last.
+    """
+    graded = [(compare(gold, r), r) for r in results]
+    for grade in ("match", "extra_columns"):
+        for g, r in graded:
+            if g == grade:
+                return g, r
+    return "mismatch", results[-1] if results else None
+
+
 # --------------------------------------------------------------------------- #
 # The model loop
 # --------------------------------------------------------------------------- #
@@ -435,13 +450,13 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args) -> dict:
                 failures.append({"call": calls, "tool": name, "error": problem})
             structured = result.get("structuredContent") or {}
             results = structured.get("results") or []
+            ran = [r for r in results if r.get("failure") is None]
             if name == "relix_submit" and structured.get("submitted"):
-                submission = {"script": structured.get("script"),
-                              "result": results[-1] if results else None}
+                submission = {"script": structured.get("script"), "results": ran}
             finished = (name == "relix_run" and structured.get("valid") and not structured.get("stopped")
                         and results and results[-1].get("failure") is None)
             if finished:
-                runs.append({"call": calls, "result": results[-1]})
+                runs.append({"call": calls, "results": ran})
             events.append({"tool": name, "arguments": arguments, "result": text_of(result),
                            **({"rows": results[-1]} if finished else {})})
             messages.append({"role": "tool", "tool_call_id": call.get("id", ""),
@@ -551,7 +566,7 @@ def main(argv=None) -> int:
             with free_lock:
                 free.append(server)
         gold = golds.get(item["id"])
-        answer = (outcome["submission"] or {}).get("result")
+        answer = None
         right_at = None
         if outcome["submission"] is None:
             grade = "no_submit"
@@ -559,13 +574,13 @@ def main(argv=None) -> int:
             # solved it and failed only to finish: a different problem from not solving it.
             if gold is not None:
                 right_at = next((r["call"] for r in reversed(outcome["runs"])
-                                 if compare(gold, r["result"]) in ("match", "extra_columns")), None)
+                                 if best(gold, r["results"])[0] in ("match", "extra_columns")), None)
                 if right_at is not None:
                     grade = "right_not_submitted"
-        elif answer is None or gold is None:
+        elif gold is None:
             grade = "mismatch"
         else:
-            grade = compare(gold, answer)
+            grade, answer = best(gold, outcome["submission"]["results"])
         submitted = (outcome["submission"] or {}).get("script")
         # Over a data key the server ignores a table the script declares again, so a copy
         # can't change the rows; only an inline run's copy can.
