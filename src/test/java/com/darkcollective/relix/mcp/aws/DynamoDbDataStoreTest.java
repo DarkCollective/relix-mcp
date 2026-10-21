@@ -86,6 +86,7 @@ class DynamoDbDataStoreTest {
         clock.advance(DataStore.TTL);
 
         assertThat(store.active("alice")).isZero();
+        assertThat(store.keys("alice")).isEmpty();
         assertThat(store.get("alice", "k1")).isEmpty();
         assertThat(store.remove("alice", "k1")).as("an expired item was not held").isFalse();
     }
@@ -98,7 +99,9 @@ class DynamoDbDataStoreTest {
         store.put("bob", "k3", DATA);
 
         assertThat(store.active("alice")).isEqualTo(2);
+        assertThat(store.keys("alice")).containsExactlyInAnyOrder("k1", "k2");
         assertThat(store.remove("alice", "k1")).isTrue();
+        assertThat(store.keys("alice")).containsExactly("k2");
         assertThat(store.active("alice")).isEqualTo(1);
         assertThat(store.active("bob")).isEqualTo(1);
     }
