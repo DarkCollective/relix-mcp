@@ -11,14 +11,19 @@ in relix-core. It is not part of the Gradle build.
 
 - **Questions:** the relix-ask held-out suites in the relix repository,
   `docs/llm/<suite>/` (`data.relix` and `queries.json`, with a gold query per
-  question). `ecommerce` and `issue-tracker` fit a model's context;
-  `home-automation`'s data is too large to repeat in every tool call.
+  question).
 - **Model:** any model LM Studio serves through its OpenAI-compatible API,
   `http://localhost:1234/v1` by default.
 - **Server:** this repository's launcher (`./gradlew installDist`), started over
   stdio once per worker, so the tools are the ones on this branch and the engine
   is whatever `relixVersion` resolves to.
-- **System prompt:** `system-prompt.txt`, or `--prompt`.
+- **Data:** loaded once per server and suite with `relix_load`; the model is given
+  the data key and each table's columns, not the rows (`--data key`, the default).
+  `--data inline` puts the declarations in the question instead, for the model to
+  copy into every script, as before `relix_load` existed; `home-automation`'s data
+  (about 31,000 tokens) is too large for that.
+- **System prompt:** `system-prompt.txt` with a data key, `system-prompt-inline.txt`
+  with `--data inline`, or `--prompt`.
 
 ## Running
 
@@ -74,5 +79,5 @@ A question passes (`match`) when the rows `relix_submit` returned equal the gold
 query's rows over the same data, as a multiset. Columns are matched by their
 values, so the model's column names and order don't matter. `extra_columns`
 means the gold's rows were all there with more columns than asked for;
-`mismatch` means different rows; `data_altered` means different rows from a script whose copy of a table it reads differs from the data given (the model retyped it), kept apart from a wrong query; `right_not_submitted` means the model never submitted, but one of its `relix_run` calls returned the right rows (the summary says which call), so it solved the question and failed only to finish; `no_submit` means it never submitted and no run of it was right. The summary's "right rows reached" counts `match`, `extra_columns` and `right_not_submitted`.
+`mismatch` means different rows; `data_altered` means different rows from a script whose copy of a table it reads differs from the data given (the model retyped it), kept apart from a wrong query; it arises only with `--data inline`, since over a data key the server ignores a table the script declares again; `right_not_submitted` means the model never submitted, but one of its `relix_run` calls returned the right rows (the summary says which call), so it solved the question and failed only to finish; `no_submit` means it never submitted and no run of it was right. The summary's "right rows reached" counts `match`, `extra_columns` and `right_not_submitted`.
 Row order isn't graded.

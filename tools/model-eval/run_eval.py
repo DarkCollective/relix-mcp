@@ -7,6 +7,12 @@ OpenAI-compatible API, with a system prompt and this server's tools. The model's
 tool calls are executed against relix-mcp's own launcher over stdio, exactly as an
 MCP client would, until it submits an answer, stops, or runs out of calls.
 
+By default the harness loads each suite's data with relix_load, once per server,
+and gives the model the data key and the tables' columns instead of the rows, as
+an embedding application would: the model never retypes a row. --data inline puts
+the declarations in the user's message instead, for the model to copy into every
+script.
+
 A question passes when the rows relix_submit returned equal the rows its gold
 query returns over the same data (as a multiset; columns matched by their values,
 so the model's column names and order don't matter). Every run's transcript is
@@ -44,6 +50,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 DEFAULT_LAUNCHER = os.path.join(ROOT, "build", "install", "relix-mcp", "bin", "relix-mcp")
 DEFAULT_PROMPT = os.path.join(HERE, "system-prompt.txt")
+INLINE_PROMPT = os.path.join(HERE, "system-prompt-inline.txt")
 DEFAULT_API = "http://localhost:1234/v1"
 DEFAULT_MODEL = "openai/gpt-oss-20b"
 
@@ -67,6 +74,7 @@ class McpServer:
                                       stderr=subprocess.DEVNULL, text=True, bufsize=1, env=env)
         self._next = 0
         self._lock = threading.Lock()
+        self.keys = {}  # suite name -> (data key, tables as relix_load described them)
         init = self._request("initialize", {
             "protocolVersion": "2025-06-18", "capabilities": {},
             "clientInfo": {"name": "relix-model-eval", "version": "1"}})
@@ -96,6 +104,25 @@ class McpServer:
     def call(self, name: str, arguments: dict) -> dict:
         """Calls a tool; returns its result: content, structuredContent, isError."""
         return self._request("tools/call", {"name": name, "arguments": arguments})
+
+    def load(self, suite: str, data: str) -> tuple[str, list[dict]]:
+        """The suite's data key on this server, loading the data the first time it is asked for."""
+        with self._lock:
+            held = self.keys.get(suite)
+        if held is None:
+            result = self.call("relix_load", {"tables": data})
+            structured = result.get("structuredContent") or {}
+            if result.get("isError") or not structured.get("key"):
+                raise RuntimeError(f"relix_load refused {suite}'s data: {text_of(result)[:500]}")
+            held = (structured["key"], structured.get("tables") or [])
+            with self._lock:
+                self.keys[suite] = held
+        return held
+
+    def unload_all(self):
+        for key, _ in list(self.keys.values()):
+            self.call("relix_unload", {"key": key})
+        self.keys.clear()
 
     def close(self):
         try:
@@ -192,9 +219,12 @@ def read_by_query(script: str | None, tables: list[str]) -> list[str]:
     return [t for t in tables if re.search(rf"\b{re.escape(t)}\b", statements, re.IGNORECASE)]
 
 
-def gold_result(server: McpServer, data: str, gold: str) -> dict | None:
+def gold_result(server: McpServer, suite: str, data: str, gold: str, by_key: bool) -> dict | None:
     """The gold query's last result over the suite's data, or None when it fails."""
-    run = server.call("relix_run", {"script": data + "\n\n" + gold})
+    if by_key:
+        run = server.call("relix_run", {"script": gold, "data": server.load(suite, data)[0]})
+    else:
+        run = server.call("relix_run", {"script": data + "\n\n" + gold})
     results = (run.get("structuredContent") or {}).get("results") or []
     if not results or results[-1].get("failure") is not None:
         return None
@@ -320,10 +350,24 @@ def failed(name: str, result: dict) -> str | None:
     return None
 
 
+def described(key: str, tables: list[dict]) -> str:
+    """What the model is told of data loaded for it: the key, and each table's columns."""
+    lines = [f'The data is loaded under the data key {key}. Pass "data": "{key}" with every '
+             f"relix_validate, relix_run, relix_submit and relix_explain call. Its tables:", ""]
+    for t in tables:
+        columns = ", ".join(f"{c} {ty}" for c, ty in zip(t["columns"], t["types"]))
+        lines.append(f"- {t['name']} ({t['rows']} rows): {columns}")
+    return "\n".join(lines)
+
+
 def ask(item: dict, data: str, prompt: str, server: McpServer, args) -> dict:
     tools = openai_tools(server.tools)
+    if args.data == "key":
+        given = described(*server.load(item["suite"], data))
+    else:
+        given = f"Here is the data.\n\n{data}"
     messages = [{"role": "system", "content": prompt},
-                {"role": "user", "content": f"Here is the data.\n\n{data}\n\n{item['instruction']}"}]
+                {"role": "user", "content": f"{given}\n\n{item['instruction']}"}]
     events, calls, failures, topics, runs = [], 0, [], [], []
     submission, final_text, stop = None, "", "turns"
     started = time.time()
@@ -417,7 +461,12 @@ def main(argv=None) -> int:
                                       "the suites are staged at it and the servers' clocks fixed to it")
     parser.add_argument("--no-stage", action="store_true",
                         help="use the suites as committed, with the real clock (NOW() questions drift)")
-    parser.add_argument("--prompt", default=DEFAULT_PROMPT)
+    parser.add_argument("--data", choices=("key", "inline"), default="key",
+                        help="'key' (the default) loads each suite once with relix_load and gives the "
+                             "model its key and columns; 'inline' puts the declarations in the question "
+                             "for the model to copy into every script")
+    parser.add_argument("--prompt", help=f"the system prompt (default: {os.path.basename(DEFAULT_PROMPT)}, "
+                                         f"or {os.path.basename(INLINE_PROMPT)} with --data inline)")
     parser.add_argument("--launcher", default=DEFAULT_LAUNCHER)
     parser.add_argument("--api", default=DEFAULT_API)
     parser.add_argument("--model", default=DEFAULT_MODEL)
@@ -440,6 +489,8 @@ def main(argv=None) -> int:
               f"  ~/.lmstudio/bin/lms load {args.model} --context-length 65536 --parallel {args.workers}",
               file=sys.stderr)
         return 2
+    if args.prompt is None:
+        args.prompt = INLINE_PROMPT if args.data == "inline" else DEFAULT_PROMPT
     with open(args.prompt) as f:
         prompt = f.read()
     if args.temperature is not None:
@@ -462,7 +513,8 @@ def main(argv=None) -> int:
         items.extend(suite_items)
 
     def usable(item):
-        result = gold_result(grader, data[item["suite"]], item["gold"])
+        result = gold_result(grader, item["suite"], data[item["suite"]], item["gold"],
+                             args.data == "key")
         golds[item["id"]] = result
         return result is not None and bool(result.get("rows"))
 
@@ -507,7 +559,9 @@ def main(argv=None) -> int:
         else:
             grade = compare(gold, answer)
         submitted = (outcome["submission"] or {}).get("script")
-        altered = altered_tables(data[item["suite"]], submitted)
+        # Over a data key the server ignores a table the script declares again, so a copy
+        # can't change the rows; only an inline run's copy can.
+        altered = altered_tables(data[item["suite"]], submitted) if args.data == "inline" else []
         if grade in ("mismatch", "extra_columns") and read_by_query(submitted, altered):
             # The rows differ because the model retyped a table it reads, not because its
             # query is wrong: a copying failure, kept apart from a wrong answer.
@@ -530,6 +584,7 @@ def main(argv=None) -> int:
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as pool:
         records = list(pool.map(run, chosen))
     for server in servers + [grader]:
+        server.unload_all()
         server.close()
 
     with open(os.path.join(out, "results.jsonl"), "w") as f:
@@ -547,6 +602,7 @@ def summary(records: list[dict], args, server_info: dict) -> str:
     lines = [f"# Model eval: {args.model}", "",
              f"Server: {server_info.get('title')} {server_info.get('version')}. "
              f"Suites: {', '.join(args.suite)}. Questions: {total}. "
+             f"Data: {'loaded once, by key' if args.data == 'key' else 'inline, copied by the model'}. "
              f"NOW(): {getattr(args, 'pinned_now', None) or 'the real clock'}.", "",
              "| grade | count |", "|---|---|"]
     lines += [f"| {g} | {n} |" for g, n in grades.most_common()]
