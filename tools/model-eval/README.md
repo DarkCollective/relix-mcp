@@ -19,9 +19,9 @@ in relix-core. It is not part of the Gradle build.
   is whatever `relixVersion` resolves to.
 - **Data:** loaded once per server and suite with `relix_load`; the model is given
   the data key and each table's columns, not the rows (`--data key`, the default).
-  The model is not offered `relix_load` or `relix_unload` then: the data is the
-  harness's, and a load by the model with that key would replace a suite table for
-  every later question on the same server.
+  The data is loaded read-only, and the model is not offered `relix_load` or
+  `relix_unload`: the data is the harness's, and one model once replaced a suite
+  table under the harness's key, for every later question on the same server.
   `--data inline` puts the declarations in the question instead, for the model to
   copy into every script, as before `relix_load` existed; `home-automation`'s data
   (about 31,000 tokens) is too large for that.

@@ -4,6 +4,7 @@ import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestStreamHandler;
 import com.darkcollective.relix.mcp.Deadline;
 import com.darkcollective.relix.mcp.Main;
+import com.darkcollective.relix.mcp.data.DataKeys;
 import com.darkcollective.relix.mcp.http.ApiKeyAuthenticator;
 import com.darkcollective.relix.mcp.http.Authenticator;
 import com.darkcollective.relix.mcp.http.StatelessHttpTransport;
@@ -50,6 +51,11 @@ import java.util.function.Supplier;
  *   <li>{@value #QUERY_TIMEOUT}: how many seconds one query of a {@code relix_run} may take;
  *       {@code 0} leaves only the deadline on the whole call. Unset, it is
  *       {@link ScriptRunner#DEFAULT_QUERY_TIMEOUT}.</li>
+ *   <li>{@value DynamoDbDataStore#TABLE_VARIABLE}: the DynamoDB table {@code relix_load}
+ *       keeps data in. Unset, the server offers no {@code relix_load}: one instance's memory
+ *       is not the next request's, so data needs a store every instance shares.</li>
+ *   <li>{@value DataKeys#MAX_KEYS_VARIABLE}: how many data keys one API key may hold at
+ *       once, {@value DataKeys#DEFAULT_MAX_KEYS} unless it says.</li>
  * </ul>
  *
  * <p>Under SnapStart, Lambda constructs the handler once, when a version is published, and
@@ -81,6 +87,11 @@ public final class LambdaHandler implements RequestStreamHandler {
     /**
      * One call to each tool, each needing a different part of the engine: the function
      * library, the solver, the connectors and the Postgres dialect, the reference pages.
+     *
+     * <p>Not {@code relix_load} or {@code relix_unload}: they reach the data table, and
+     * nothing should before the snapshot, whose credentials would then be the snapshot's.
+     * The engine paths they use are the ones {@code relix_validate} and {@code relix_run}
+     * load.
      */
     static final List<String> WARM_UP = List.of(
             """
@@ -119,7 +130,8 @@ public final class LambdaHandler implements RequestStreamHandler {
 
     LambdaHandler(Map<String, String> env) {
         this(new ApiKeyAuthenticator(apiKey(env, () -> ParametersAndSecrets.of(env, JSON))),
-                new ScriptRunner(ScriptRunner.sandbox(queryTimeout(env))), path(env));
+                new ScriptRunner(ScriptRunner.sandbox(queryTimeout(env))), path(env),
+                dataKeys(env));
         if ("snap-start".equals(env.get(INITIALIZATION_TYPE))) {
             warm();
         }
@@ -145,15 +157,36 @@ public final class LambdaHandler implements RequestStreamHandler {
      * @param path          the path the server answers at, such as {@value #PATH}
      */
     public LambdaHandler(Authenticator authenticator, ScriptRunner runner, String path) {
+        this(authenticator, runner, path, null);
+    }
+
+    /**
+     * A handler letting in what {@code authenticator} allows, running scripts with
+     * {@code runner}, answering at {@code path}, and keeping loaded data in {@code keys}.
+     *
+     * @param authenticator decides who may call, and names the owner of their data
+     * @param runner        runs the scripts {@code relix_run} is given
+     * @param path          the path the server answers at, such as {@value #PATH}
+     * @param keys          where {@code relix_load} keeps data, in a store every instance
+     *                      shares; null to offer no {@code relix_load}
+     */
+    public LambdaHandler(Authenticator authenticator, ScriptRunner runner, String path,
+                         DataKeys keys) {
         this.authenticator = Objects.requireNonNull(authenticator, "authenticator");
         this.path = Objects.requireNonNull(path, "path");
         // No Origin or Host check: there is no local name to rebind, and the key, which a
         // browser does not send across origins unasked, is the check.
         this.transport = new StatelessHttpTransport(JSON, ServerTransportSecurityValidator.NOOP);
-        // No relix_load yet: one instance's memory is not the next request's, so a key held
-        // in it would be found only some of the time. It waits for a store the instances
-        // share (DynamoDB, relix-mcp#48).
-        Main.statelessServer(transport, runner);
+        Main.statelessServer(transport, runner, keys);
+    }
+
+    /**
+     * Where {@code relix_load} keeps data, from the environment: null when no table is named.
+     */
+    static DataKeys dataKeys(Map<String, String> env) {
+        return DynamoDbDataStore.of(env, JSON)
+                .map(store -> new DataKeys(store, DataKeys.maxKeys(env)))
+                .orElse(null);
     }
 
     @Override

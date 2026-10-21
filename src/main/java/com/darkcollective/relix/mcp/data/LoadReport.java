@@ -16,9 +16,10 @@ import java.util.stream.Collectors;
  *                 {@value LoadedData#LABEL}
  * @param refusal  why the load was refused before the data was checked, or null
  * @param text     the declarations the findings point into
+ * @param readOnly whether the key's tables may no longer be replaced or added to
  */
 public record LoadReport(String key, List<Table> tables, List<String> replaced,
-                         List<Finding> findings, String refusal, String text) {
+                         List<Finding> findings, String refusal, String text, boolean readOnly) {
 
     /**
      * One table a key holds.
@@ -47,11 +48,11 @@ public record LoadReport(String key, List<Table> tables, List<String> replaced,
     }
 
     static LoadReport refused(String refusal) {
-        return new LoadReport(null, List.of(), List.of(), List.of(), refusal, "");
+        return new LoadReport(null, List.of(), List.of(), List.of(), refusal, "", false);
     }
 
     static LoadReport invalid(List<Finding> findings, String text) {
-        return new LoadReport(null, List.of(), List.of(), findings, null, text);
+        return new LoadReport(null, List.of(), List.of(), findings, null, text, false);
     }
 
     /**
@@ -80,6 +81,7 @@ public record LoadReport(String key, List<Table> tables, List<String> replaced,
                     + " in the data. Fix them, then call 'relix_load' again.\n" + findingsText;
         }
         StringBuilder out = new StringBuilder("Loaded under the data key ").append(key)
+                .append(readOnly ? ", read-only: its tables cannot be replaced or added to" : "")
                 .append(". Pass it as 'data' to relix_validate, relix_run, relix_submit and ")
                 .append("relix_explain: their scripts then read these tables without ")
                 .append("declaring them, and hold only the query.\n");
