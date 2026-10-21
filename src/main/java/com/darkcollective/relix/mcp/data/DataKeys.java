@@ -105,11 +105,7 @@ public final class DataKeys {
     }
 
     /**
-     * Checks and stores tables.
-     *
-     * <p>With no key, the tables are held under a new one. With a key, they are added to
-     * what it holds, and a table it already holds by the same name is replaced; with a key
-     * and no tables, nothing changes, and the report describes what the key holds.
+     * Checks and stores tables under a key that may be added to later.
      *
      * @param owner  whose data it is
      * @param key    a key the owner holds, or null for a new one
@@ -117,6 +113,28 @@ public final class DataKeys {
      * @return the key and its tables, or why nothing was stored
      */
     public LoadReport load(String owner, String key, String tables) {
+        return load(owner, key, tables, false);
+    }
+
+    /**
+     * Checks and stores tables.
+     *
+     * <p>With no key, the tables are held under a new one. With a key, they are added to
+     * what it holds, and a table it already holds by the same name is replaced; with a key
+     * and no tables, nothing changes, and the report describes what the key holds.
+     *
+     * <p>A <em>read-only</em> key's tables are never replaced or added to, by any caller
+     * holding it: a client that loads data for a model to read loads it read-only, so the
+     * model cannot change it for the next question. It can still be released, which is how
+     * its owner frees its place under the limit.
+     *
+     * @param owner    whose data it is
+     * @param key      a key the owner holds, or null for a new one
+     * @param tables   inline-table declarations, or null or blank for none
+     * @param readOnly whether the key is to be read-only from now on; a key that is stays so
+     * @return the key and its tables, or why nothing was stored
+     */
+    public LoadReport load(String owner, String key, String tables, boolean readOnly) {
         Objects.requireNonNull(owner, "owner");
         boolean adding = tables != null && !tables.isBlank();
         LoadedData held = LoadedData.NONE;
@@ -124,6 +142,15 @@ public final class DataKeys {
             Optional<StoredData> stored = store.get(owner, key);
             if (stored.isEmpty()) {
                 return LoadReport.refused(notFound(key));
+            }
+            if (stored.get().readOnly()) {
+                if (adding) {
+                    return LoadReport.refused("Not loaded: the data key " + key + " is "
+                            + "read-only, so its tables cannot be replaced or added to. Read "
+                            + "them by passing it as 'data', or load other tables under a new "
+                            + "key by calling 'relix_load' without 'key'.");
+                }
+                readOnly = true;
             }
             held = LoadedData.of(stored.get().declarations());
         } else if (!adding) {
@@ -206,8 +233,8 @@ public final class DataKeys {
         }
         warned.sort(Comparator.comparing(data.names()::indexOf));
         String under = key != null ? key : newKey();
-        store.put(owner, under, new StoredData(text, findings.size(), warned));
-        return new LoadReport(under, described, replaced, findings, null, text);
+        store.put(owner, under, new StoredData(text, findings.size(), warned, readOnly));
+        return new LoadReport(under, described, replaced, findings, null, text, readOnly);
     }
 
     /**

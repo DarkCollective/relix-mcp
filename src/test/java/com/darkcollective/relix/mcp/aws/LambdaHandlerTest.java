@@ -7,7 +7,10 @@ import com.amazonaws.services.lambda.runtime.LambdaLogger;
 import com.darkcollective.relix.embed.Sandbox;
 import com.darkcollective.relix.mcp.Deadline;
 import com.darkcollective.relix.mcp.SlowScript;
+import com.darkcollective.relix.mcp.data.DataKeys;
+import com.darkcollective.relix.mcp.data.InMemoryDataStore;
 import com.darkcollective.relix.mcp.http.ApiKeyAuthenticator;
+import com.darkcollective.relix.mcp.http.StatelessHttpTransport;
 import com.darkcollective.relix.mcp.run.ScriptRunner;
 import io.modelcontextprotocol.json.McpJsonDefaults;
 import io.modelcontextprotocol.json.McpJsonMapper;
@@ -168,6 +171,46 @@ class LambdaHandlerTest {
                 .hasMessageContaining(LambdaHandler.QUERY_TIMEOUT);
         assertThatThrownBy(() -> LambdaHandler.queryTimeout(Map.of(LambdaHandler.QUERY_TIMEOUT, "ten")))
                 .hasMessageContaining("ten");
+    }
+
+    /**
+     * Two deployments' keys sharing one store: the data a key loads is held under that key's
+     * owner, so the other key's caller never finds it.
+     */
+    @Test
+    void loadedDataIsHeldUnderTheApiKeyThatLoadedIt() throws IOException {
+        DataKeys keys = new DataKeys(new InMemoryDataStore(), 5);
+        LambdaHandler first = new LambdaHandler(new ApiKeyAuthenticator(KEY), new ScriptRunner(), "/mcp", keys);
+        LambdaHandler second = new LambdaHandler(new ApiKeyAuthenticator("another-key-987"),
+                new ScriptRunner(), "/mcp", keys);
+        String load = JSON.writeValueAsString(Map.of("jsonrpc", "2.0", "id", 1, "method", "tools/call",
+                "params", Map.of("name", "relix_load", "arguments",
+                        Map.of("tables", "T := [\n| a |\n|---|\n| 1 |\n];"))));
+        Map<?, ?> loaded = result(first.respond(event(KEY, load), Deadline.after(Duration.ofSeconds(30))));
+        String dataKey = (String) ((Map<?, ?>) loaded.get("structuredContent")).get("key");
+        String run = JSON.writeValueAsString(Map.of("jsonrpc", "2.0", "id", 2, "method", "tools/call",
+                "params", Map.of("name", "relix_run", "arguments",
+                        Map.of("data", dataKey, "script", "query { T };"))));
+
+        assertThat(result(first.respond(event(KEY, run), Deadline.after(Duration.ofSeconds(30))))
+                .get("isError")).isNotEqualTo(true);
+        assertThat(result(second.respond(event("another-key-987", run), Deadline.after(Duration.ofSeconds(30))))
+                .get("isError")).isEqualTo(true);
+    }
+
+    @Test
+    void noTableNamedMeansNoDataKeys() {
+        assertThat(LambdaHandler.dataKeys(Map.of())).isNull();
+        assertThat(LambdaHandler.dataKeys(Map.of(DynamoDbDataStore.TABLE_VARIABLE, "relix-mcp-data",
+                "AWS_REGION", "us-east-1", DataKeys.MAX_KEYS_VARIABLE, "7")).maxKeys()).isEqualTo(7);
+        assertThatThrownBy(() -> LambdaHandler.dataKeys(Map.of(DynamoDbDataStore.TABLE_VARIABLE, "t",
+                "AWS_REGION", "us-east-1", DataKeys.MAX_KEYS_VARIABLE, "0")))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    private static Map<?, ?> result(StatelessHttpTransport.Response response) throws IOException {
+        assertThat(response.status()).as(response.body()).isEqualTo(200);
+        return (Map<?, ?>) JSON.readValue(response.body(), Map.class).get("result");
     }
 
     private Map<?, ?> invoke(Map<String, Object> event, Duration remaining) throws IOException {

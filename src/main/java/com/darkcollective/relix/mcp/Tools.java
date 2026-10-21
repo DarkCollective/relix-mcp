@@ -2,6 +2,7 @@ package com.darkcollective.relix.mcp;
 
 import com.darkcollective.relix.docs.ReferencePage;
 import com.darkcollective.relix.mcp.data.DataKeys;
+import com.darkcollective.relix.mcp.data.DataStoreException;
 import com.darkcollective.relix.mcp.data.LoadReport;
 import com.darkcollective.relix.mcp.data.LoadedData;
 import com.darkcollective.relix.mcp.data.StoredData;
@@ -254,8 +255,8 @@ final class Tools {
             'relix_explain', and leave the loaded tables out of the script: a declaration \
             of one there is ignored, with a warning. Send 'key' with 'tables' to add tables \
             to a key, replacing any it holds by the same name, or 'key' alone to see what \
-            it holds. A key lasts an hour from its last use. A caller may hold %d at once; \
-            'relix_unload' releases one.""";
+            it holds; a key loaded with 'read_only' can never be changed. A key lasts an \
+            hour from its last use. A caller may hold %d at once; 'relix_unload' releases one.""";
 
     private static final String UNLOAD_DESCRIPTION = """
             Releases a data key from 'relix_load' before it expires, with the tables it \
@@ -408,7 +409,11 @@ final class Tools {
                                         + "Name := [ ... ];"),
                         "key", Map.of("type", "string",
                                 "description", "a data key you hold: the tables are added to "
-                                        + "it; alone, it shows what the key holds")));
+                                        + "it; alone, it shows what the key holds"),
+                        "read_only", Map.of("type", "boolean",
+                                "description", "true to make the key read-only: no call, "
+                                        + "whoever makes it, can then replace or add to its "
+                                        + "tables")));
         Tool tool = Tool.builder("relix_load", schema)
                 .title("Load inline tables once, to read by a data key")
                 .description(LOAD_DESCRIPTION.formatted(keys.maxKeys()))
@@ -589,7 +594,12 @@ final class Tools {
         if (!(key instanceof String sent) || sent.isBlank()) {
             return failure("'data' is a data key from 'relix_load', as a string.");
         }
-        Optional<StoredData> stored = keys.find(owner, sent.strip());
+        Optional<StoredData> stored;
+        try {
+            stored = keys.find(owner, sent.strip());
+        } catch (DataStoreException e) {
+            return failure(STORE_FAILED + e.getMessage());
+        }
         if (stored.isEmpty()) {
             return failure(DataKeys.notFound(sent.strip()));
         }
@@ -765,14 +775,24 @@ final class Tools {
         if (args.get("key") != null && !(args.get("key") instanceof String)) {
             return failure("'key' is a data key from 'relix_load', as a string.");
         }
+        if (args.get("read_only") != null && !(args.get("read_only") instanceof Boolean)) {
+            return failure("'read_only' is true or false.");
+        }
         String key = args.get("key") instanceof String sent && !sent.isBlank() ? sent.strip() : null;
-        LoadReport report = keys.load(owner, key, (String) args.get("tables"));
+        LoadReport report;
+        try {
+            report = keys.load(owner, key, (String) args.get("tables"),
+                    Boolean.TRUE.equals(args.get("read_only")));
+        } catch (DataStoreException e) {
+            return failure(STORE_FAILED + e.getMessage());
+        }
         if (stopped.getAsBoolean()) {
             return NOTHING_FINISHED;
         }
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("loaded", report.loaded());
         data.put("key", report.key());
+        data.put("readOnly", report.readOnly());
         data.put("tables", report.tables().stream().map(Tools::asData).toList());
         data.put("replaced", report.replaced());
         data.put("findings", report.findings().stream().map(Tools::asData).toList());
@@ -795,13 +815,21 @@ final class Tools {
         if (!(key instanceof String sent) || sent.isBlank()) {
             return failure("'key' is required: the data key to release.");
         }
-        boolean released = keys.unload(owner, sent.strip());
+        boolean released;
+        try {
+            released = keys.unload(owner, sent.strip());
+        } catch (DataStoreException e) {
+            return failure(STORE_FAILED + e.getMessage());
+        }
         return CallToolResult.builder()
                 .addTextContent(released ? "Released the data key " + sent.strip() + "."
                         : DataKeys.notFound(sent.strip()))
                 .structuredContent(Map.of("released", released))
                 .build();
     }
+
+    /** What a call is told when the loaded data could not be reached, before why. */
+    static final String STORE_FAILED = "The loaded data could not be reached; try again shortly. ";
 
     /** What a data tool tells a caller the server cannot tell apart from any other. */
     static final String NO_OWNER = "This server cannot tell its callers apart, so it holds no "
