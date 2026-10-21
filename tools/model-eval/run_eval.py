@@ -174,7 +174,10 @@ def load_suite(suites_dir: str, name: str) -> tuple[str, list[dict]]:
         match = _EXPRESSION.search(query["output"])
         items.append({"suite": name, "index": index, "category": query.get("category", ""),
                       "instruction": query["instruction"],
-                      "gold": match.group(1).strip() if match else query["output"].strip()})
+                      "gold": match.group(1).strip() if match else query["output"].strip(),
+                      # A question that leaves a choice open lists the gold of each other
+                      # reading it allows; any of them passes.
+                      "accepted": [a.strip() for a in query.get("also_accepted") or [] if a.strip()]})
     return data, items
 
 
@@ -303,14 +306,15 @@ def compare(gold: dict, answer: dict) -> str:
     return "match" if len(answer_cols) == len(gold_cols) else "extra_columns"
 
 
-def best(gold: dict, results: list[dict]) -> tuple[str, dict | None]:
+def best(golds: list[dict], results: list[dict]) -> tuple[str, dict | None]:
     """The best grade any one of a script's query results earns, and that result.
 
     A model asked for "all details" of something often adds a query per related table; the
     answer is the one that holds the rows asked for, wherever it comes in the script, so a
-    script is graded by its best query rather than its last.
+    script is graded by its best query rather than its last. ``golds`` are the results of
+    every reading the question allows, the suite's gold first; a match on any one passes.
     """
-    graded = [(compare(gold, r), r) for r in results]
+    graded = [(compare(gold, r), r) for gold in golds for r in results]
     for grade in ("match", "extra_columns"):
         for g, r in graded:
             if g == grade:
@@ -538,8 +542,15 @@ def main(argv=None) -> int:
     def usable(item):
         result = gold_result(grader, item["suite"], data[item["suite"]], item["gold"],
                              args.data == "key")
-        golds[item["id"]] = result
-        return result is not None and bool(result.get("rows"))
+        if result is None:
+            golds[item["id"]] = None
+            return False
+        readings = [gold_result(grader, item["suite"], data[item["suite"]], program,
+                                args.data == "key") for program in item["accepted"]]
+        if None in readings:
+            sys.exit(f"{item['id']}: an accepted reading's gold query fails")
+        golds[item["id"]] = [result, *readings]
+        return bool(result.get("rows"))
 
     if args.only:
         wanted = set(args.only.split(","))
@@ -565,7 +576,8 @@ def main(argv=None) -> int:
         finally:
             with free_lock:
                 free.append(server)
-        gold = golds.get(item["id"])
+        readings = golds.get(item["id"])
+        gold = readings[0] if readings else None
         answer = None
         right_at = None
         if outcome["submission"] is None:
@@ -574,13 +586,13 @@ def main(argv=None) -> int:
             # solved it and failed only to finish: a different problem from not solving it.
             if gold is not None:
                 right_at = next((r["call"] for r in reversed(outcome["runs"])
-                                 if best(gold, r["results"])[0] in ("match", "extra_columns")), None)
+                                 if best(readings, r["results"])[0] in ("match", "extra_columns")), None)
                 if right_at is not None:
                     grade = "right_not_submitted"
         elif gold is None:
             grade = "mismatch"
         else:
-            grade, answer = best(gold, outcome["submission"]["results"])
+            grade, answer = best(readings, outcome["submission"]["results"])
         submitted = (outcome["submission"] or {}).get("script")
         # Over a data key the server ignores a table the script declares again, so a copy
         # can't change the rows; only an inline run's copy can.
