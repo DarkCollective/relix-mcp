@@ -61,9 +61,10 @@ _EXPRESSION = re.compile(r"RELIX EXPRESSION:\s*(.*?)\s*(?:EXPECTED OUTPUT:|\Z)",
 class McpServer:
     """One relix-mcp process, spoken to with newline-delimited JSON-RPC."""
 
-    def __init__(self, launcher: str):
+    def __init__(self, launcher: str, now: str | None = None):
+        env = {**os.environ, **({"RELIX_MCP_NOW": now} if now else {})}
         self._proc = subprocess.Popen([launcher], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                      stderr=subprocess.DEVNULL, text=True, bufsize=1)
+                                      stderr=subprocess.DEVNULL, text=True, bufsize=1, env=env)
         self._next = 0
         self._lock = threading.Lock()
         init = self._request("initialize", {
@@ -112,6 +113,28 @@ def text_of(result: dict) -> str:
 # Suites
 # --------------------------------------------------------------------------- #
 
+def stage(suites_dir: str, names: list[str], now: str, out: str) -> str:
+    """Rebuilds each suite with its own builder at one instant; returns where they went.
+
+    A suite's data is generated relative to RELIX_SUITE_NOW (relix's docs/llm, #451 there),
+    so its NOW()-relative questions mean what they were written to mean only when the
+    engine's NOW() is that same instant: the servers are started with RELIX_MCP_NOW set to
+    it. The questions and gold queries are the builder's own, unchanged. A suite with no
+    builder is used as it is.
+    """
+    staged = os.path.join(out, "suites")
+    for name in names:
+        builder = os.path.join(suites_dir, name, "build_suite.py")
+        target = os.path.join(staged, name)
+        if os.path.exists(builder):
+            subprocess.run([sys.executable, "-I", builder, "--out-dir", target], check=True,
+                           env={**os.environ, "RELIX_SUITE_NOW": now}, stdout=subprocess.DEVNULL)
+        else:
+            import shutil
+            shutil.copytree(os.path.join(suites_dir, name), target)
+    return staged
+
+
 def load_suite(suites_dir: str, name: str) -> tuple[str, list[dict]]:
     base = os.path.join(suites_dir, name)
     with open(os.path.join(base, "data.relix")) as f:
@@ -159,6 +182,14 @@ def altered_tables(data: str, script: str | None) -> list[str]:
         return []
     given, written = _tables(data), _tables(script)
     return [name for name, rows in given.items() if name in written and written[name] != rows]
+
+
+def read_by_query(script: str | None, tables: list[str]) -> list[str]:
+    """Those of the tables that the script's statements, its declarations aside, name."""
+    if not script or not tables:
+        return []
+    statements = _DECLARATION.sub("", script)
+    return [t for t in tables if re.search(rf"\b{re.escape(t)}\b", statements, re.IGNORECASE)]
 
 
 def gold_result(server: McpServer, data: str, gold: str) -> dict | None:
@@ -257,6 +288,24 @@ def chat(api: str, payload: dict, timeout: int) -> dict:
                                      headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.load(response)
+
+
+def loaded_context(api: str, model: str) -> int | None:
+    """The context LM Studio loaded the model with, or None when it isn't loaded or can't say.
+
+    A model the API loads on first use gets LM Studio's default context (8,192 tokens for
+    gpt-oss-20b), too small for the system prompt, the tools and the data. LM Studio then
+    drops the start of the conversation, and the model restarts the task after a call.
+    """
+    try:
+        with urllib.request.urlopen(api.rsplit("/v1", 1)[0] + "/api/v0/models", timeout=10) as r:
+            models = json.load(r).get("data", [])
+    except (urllib.error.URLError, TimeoutError, ValueError):
+        return None
+    for m in models:
+        if m.get("id") == model and m.get("state") == "loaded":
+            return m.get("loaded_context_length")
+    return None
 
 
 def failed(name: str, result: dict) -> str | None:
@@ -359,19 +408,33 @@ def main(argv=None) -> int:
     parser.add_argument("--per-category", type=int, default=3)
     parser.add_argument("--seed", type=int, default=20261020)
     parser.add_argument("--only", help="comma-separated suite:index ids to run instead of a sample")
+    parser.add_argument("--now", help="the instant NOW() is, as ISO-8601 (default: the current time); "
+                                      "the suites are staged at it and the servers' clocks fixed to it")
+    parser.add_argument("--no-stage", action="store_true",
+                        help="use the suites as committed, with the real clock (NOW() questions drift)")
     parser.add_argument("--prompt", default=DEFAULT_PROMPT)
     parser.add_argument("--launcher", default=DEFAULT_LAUNCHER)
     parser.add_argument("--api", default=DEFAULT_API)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--temperature", type=float, default=None, help="overrides the preset's 0.8")
-    parser.add_argument("--workers", type=int, default=2,
-                        help="parallel requests; 4 crashed gpt-oss-20b on a 48 GB Mac")
+    parser.add_argument("--workers", type=int, default=1,
+                        help="parallel requests; 2 crashed gpt-oss-20b with a 65,536-token context "
+                             "on a 48 GB Mac, and 4 at a smaller one")
+    parser.add_argument("--min-context", type=int, default=32768,
+                        help="refuse to run unless the model is loaded with at least this context")
     parser.add_argument("--max-turns", type=int, default=40)
     parser.add_argument("--max-calls", type=int, default=25)
     parser.add_argument("--timeout", type=int, default=600, help="seconds per model request")
     parser.add_argument("--out", default=os.path.join(HERE, "runs"))
     args = parser.parse_args(argv)
 
+    context = loaded_context(args.api, args.model)
+    if context is None or context < args.min_context:
+        print(f"{args.model} is {'not loaded' if context is None else f'loaded with a {context}-token context'}"
+              f"; it needs at least {args.min_context}. Load it first:\n"
+              f"  ~/.lmstudio/bin/lms load {args.model} --context-length 65536 --parallel {args.workers}",
+              file=sys.stderr)
+        return 2
     with open(args.prompt) as f:
         prompt = f.read()
     if args.temperature is not None:
@@ -379,8 +442,13 @@ def main(argv=None) -> int:
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     out = os.path.join(args.out, stamp)
     os.makedirs(os.path.join(out, "transcripts"))
+    now = None
+    if not args.no_stage:
+        now = args.now or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        args.suites_dir = stage(args.suites_dir, args.suite, now, out)
+    args.pinned_now = now
 
-    grader = McpServer(args.launcher)
+    grader = McpServer(args.launcher, now)
     data, items, golds = {}, [], {}
     for name in args.suite:
         data[name], suite_items = load_suite(args.suites_dir, name)
@@ -402,10 +470,10 @@ def main(argv=None) -> int:
         chosen = []
         for name in args.suite:
             chosen += choose([i for i in items if i["suite"] == name], args.per_category, args.seed, usable)
-    print(f"{len(chosen)} questions; server {grader.server_info.get('title')}; model {args.model}",
-          file=sys.stderr)
+    print(f"{len(chosen)} questions; server {grader.server_info.get('title')}; model {args.model}; "
+          f"NOW() {now or 'the real clock'}", file=sys.stderr)
 
-    servers = [McpServer(args.launcher) for _ in range(args.workers)]
+    servers = [McpServer(args.launcher, now) for _ in range(args.workers)]
     free = list(servers)
     free_lock = threading.Lock()
 
@@ -425,12 +493,16 @@ def main(argv=None) -> int:
             grade = "mismatch"
         else:
             grade = compare(gold, answer)
+        submitted = (outcome["submission"] or {}).get("script")
+        altered = altered_tables(data[item["suite"]], submitted)
+        if grade in ("mismatch", "extra_columns") and read_by_query(submitted, altered):
+            # The rows differ because the model retyped a table it reads, not because its
+            # query is wrong: a copying failure, kept apart from a wrong answer.
+            grade = "data_altered"
         record = {k: item[k] for k in ("id", "suite", "category", "instruction", "gold")}
         record.update(grade=grade, stop=outcome["stop"], calls=outcome["calls"],
                       failures=outcome["failures"], learn=outcome["learn"],
-                      submitted=(outcome["submission"] or {}).get("script"),
-                      altered_tables=altered_tables(data[item["suite"]],
-                                                    (outcome["submission"] or {}).get("script")),
+                      submitted=submitted, altered_tables=altered,
                       assumption="ssum" in outcome["final_text"],
                       raw_tokens="<|" in outcome["final_text"], seconds=outcome["seconds"],
                       gold_columns=(gold or {}).get("columns"),
@@ -461,7 +533,8 @@ def summary(records: list[dict], args, server_info: dict) -> str:
     grades = collections.Counter(r["grade"] for r in records)
     lines = [f"# Model eval: {args.model}", "",
              f"Server: {server_info.get('title')} {server_info.get('version')}. "
-             f"Suites: {', '.join(args.suite)}. Questions: {total}.", "",
+             f"Suites: {', '.join(args.suite)}. Questions: {total}. "
+             f"NOW(): {getattr(args, 'pinned_now', None) or 'the real clock'}.", "",
              "| grade | count |", "|---|---|"]
     lines += [f"| {g} | {n} |" for g, n in grades.most_common()]
     passed = grades["match"]
