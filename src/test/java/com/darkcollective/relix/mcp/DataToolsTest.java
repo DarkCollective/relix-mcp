@@ -121,6 +121,53 @@ class DataToolsTest {
         assertThat(text(run)).as("the loaded table is read").contains("| 3 |");
     }
 
+    /** Relix names are case-insensitive, so a copy in another case is still a copy. */
+    @Test
+    void aCopyOfALoadedTableInAnotherCaseIsIgnoredToo() {
+        String key = load(ORDERS);
+
+        CallToolResult run = tools.run(call("relix_run", Map.of("data", key, "script", """
+                ORDERS := [
+                | order_id | customer_id | amount |
+                |----------|-------------|--------|
+                | 1        | 1           | 120    |
+                ];
+                query { GROUP COUNT(*) -> n (orders) };
+                """)));
+
+        assertThat(text(run)).contains("'ORDERS' is the loaded table 'Orders' (names are "
+                + "case-insensitive), so this declaration of it was ignored").contains("| 3 |");
+    }
+
+    /**
+     * A view named after a loaded table is left to the engine, which reports it, rather than
+     * left out, which would read the whole table in its place.
+     */
+    @Test
+    void aViewNamedAfterALoadedTableIsLeftToTheEngine() {
+        String key = load(ORDERS);
+
+        CallToolResult result = tools.validate(call("relix_validate", Map.of("data", key,
+                "script", "orders := { SELECT amount > 100 (Orders) };\nquery orders;")));
+
+        Map<?, ?> data = (Map<?, ?>) result.structuredContent();
+        assertThat(data.get("valid")).isEqualTo(false);
+        assertThat(text(result)).doesNotContain("is loaded data");
+    }
+
+    @Test
+    void aShortenedKeyIsToldToBeSentInFull() {
+        String key = load(ORDERS);
+
+        CallToolResult run = tools.run(call("relix_run", Map.of("data", key.substring(0, 8) + "…",
+                "script", "query { Orders };")));
+
+        assertThat(run.isError()).isTrue();
+        assertThat(text(run)).isEqualTo("'" + key.substring(0, 8) + "…' is not a whole data key: "
+                + "a data key is 32 hexadecimal characters, exactly as 'relix_load' gave it. "
+                + "Send it in full, not shortened.");
+    }
+
     @Test
     void theDatasWarningsAreOneLineInTheirOwnField() {
         String key = load(ORDERS);
