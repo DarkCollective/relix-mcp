@@ -141,6 +141,39 @@ class DataKeysTest {
     }
 
     @Test
+    void aKeyWithACharacterOrTwoChangedIsAnsweredWithTheKeyItWasMostLikelyMeantToBe() {
+        String key = keys.load("alice", null, ORDERS).key();
+        String typo = key.substring(0, 20) + (key.charAt(20) == 'a' ? 'b' : 'a') + key.substring(21);
+
+        assertThat(keys.missing("alice", typo)).isEqualTo("No data is held under the key '" + typo
+                + "', but this caller holds '" + key + "', which differs from it by 1 character. "
+                + "If you copied the key, use that one, exactly as it is written here.");
+        assertThat(keys.load("alice", typo, null).refusal()).contains("this caller holds '" + key + "'");
+        assertThat(keys.missing("bob", typo)).as("never another owner's key").isEqualTo(DataKeys.notFound(typo));
+        String far = "0".repeat(32);
+        assertThat(keys.missing("alice", far)).isEqualTo(DataKeys.notFound(far));
+    }
+
+    @Test
+    void twoHeldKeysEquallyCloseAreNeitherOffered() {
+        InMemoryDataStore store = new InMemoryDataStore();
+        StoredData data = new StoredData(ORDERS, 0, List.of());
+        store.put("alice", "a".repeat(31) + "b", data);
+        store.put("alice", "a".repeat(31) + "c", data);
+        String typo = "a".repeat(32);
+
+        assertThat(new DataKeys(store, 3).missing("alice", typo)).isEqualTo(DataKeys.notFound(typo));
+    }
+
+    @Test
+    void distanceCountsSingleCharacterEdits() {
+        assertThat(DataKeys.distance("abc", "abc")).isZero();
+        assertThat(DataKeys.distance("abc", "abd")).isEqualTo(1);
+        assertThat(DataKeys.distance("abcd", "acbd")).isEqualTo(2);
+        assertThat(DataKeys.distance("abc", "abcd")).isEqualTo(1);
+    }
+
+    @Test
     void anotherOwnersKeyIsNotFound() {
         String key = keys.load("alice", null, ORDERS).key();
 

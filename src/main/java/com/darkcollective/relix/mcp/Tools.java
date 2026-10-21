@@ -601,7 +601,11 @@ final class Tools {
             return failure(STORE_FAILED + e.getMessage());
         }
         if (stored.isEmpty()) {
-            return failure(DataKeys.notFound(sent.strip()));
+            try {
+                return failure(keys.missing(owner, sent.strip()));
+            } catch (DataStoreException e) {
+                return failure(DataKeys.notFound(sent.strip()));
+            }
         }
         return new Named(sent.strip(), LoadedData.of(stored.get().declarations()), stored.get());
     }
@@ -823,7 +827,7 @@ final class Tools {
         }
         return CallToolResult.builder()
                 .addTextContent(released ? "Released the data key " + sent.strip() + "."
-                        : DataKeys.notFound(sent.strip()))
+                        : keys.missing(owner, sent.strip()))
                 .structuredContent(Map.of("released", released))
                 .build();
     }

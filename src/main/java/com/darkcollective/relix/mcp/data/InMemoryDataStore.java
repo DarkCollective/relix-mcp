@@ -3,6 +3,7 @@ package com.darkcollective.relix.mcp.data;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -38,12 +39,12 @@ public final class InMemoryDataStore implements DataStore {
     @Override
     public synchronized void put(String owner, String key, StoredData data) {
         Objects.requireNonNull(data, "data");
-        keys(owner).put(key, new Entry(data, clock.instant().plus(TTL)));
+        live(owner).put(key, new Entry(data, clock.instant().plus(TTL)));
     }
 
     @Override
     public synchronized Optional<StoredData> get(String owner, String key) {
-        Map<String, Entry> keys = keys(owner);
+        Map<String, Entry> keys = live(owner);
         Entry entry = keys.get(key);
         if (entry == null) {
             return Optional.empty();
@@ -54,16 +55,21 @@ public final class InMemoryDataStore implements DataStore {
 
     @Override
     public synchronized int active(String owner) {
-        return keys(owner).size();
+        return live(owner).size();
+    }
+
+    @Override
+    public synchronized List<String> keys(String owner) {
+        return List.copyOf(live(owner).keySet());
     }
 
     @Override
     public synchronized boolean remove(String owner, String key) {
-        return keys(owner).remove(key) != null;
+        return live(owner).remove(key) != null;
     }
 
     /** The owner's keys, with those that have expired dropped. */
-    private Map<String, Entry> keys(String owner) {
+    private Map<String, Entry> live(String owner) {
         Objects.requireNonNull(owner, "owner");
         Map<String, Entry> keys = owners.computeIfAbsent(owner, o -> new HashMap<>());
         Instant now = clock.instant();

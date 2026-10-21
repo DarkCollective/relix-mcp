@@ -167,6 +167,32 @@ public final class DynamoDbDataStore implements DataStore {
     }
 
     @Override
+    public List<String> keys(String owner) {
+        List<String> keys = new ArrayList<>();
+        Object start = null;
+        do {
+            Map<String, Object> request = new LinkedHashMap<>();
+            request.put("TableName", table);
+            request.put("KeyConditionExpression", OWNER + " = :owner");
+            request.put("FilterExpression", EXPIRES + " > :now");
+            request.put("ProjectionExpression", KEY);
+            request.put("ExpressionAttributeValues",
+                    Map.of(":owner", Map.of("S", owner), ":now", number(now())));
+            if (start != null) {
+                request.put("ExclusiveStartKey", start);
+            }
+            Map<?, ?> answer = call("Query", request);
+            if (answer.get("Items") instanceof List<?> items) {
+                for (Object item : items) {
+                    keys.add(string((Map<?, ?>) item, KEY));
+                }
+            }
+            start = answer.get("LastEvaluatedKey");
+        } while (start != null);
+        return keys;
+    }
+
+    @Override
     public boolean remove(String owner, String key) {
         Map<?, ?> answer = call("DeleteItem", Map.of("TableName", table, "Key", key(owner, key),
                 "ReturnValues", "ALL_OLD"));
