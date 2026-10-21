@@ -210,6 +210,12 @@ public final class LoadedData {
      * declaration of one is most likely a copy, and perhaps a wrong one. It is reported and
      * ignored, and the script reads the loaded table; the call is not refused.
      *
+     * <p>A copy is an inline table or a source, and it is a copy in any case, since Relix
+     * names are case-insensitive: {@code ORDERS := [ ... ];} would otherwise replace a loaded
+     * {@code orders}. A view, or a relation defined with {@code def}, is left to the engine:
+     * named after a loaded table, it is most often a view the writer meant as new, and
+     * leaving it out would read the whole loaded table in its place.
+     *
      * @param script the script's text
      * @return the script, parsed and with those declarations left out; with no script
      *         when there is no data or the text does not parse, so the session reports
@@ -229,17 +235,31 @@ public final class LoadedData {
         List<Statement> kept = new ArrayList<>();
         List<Finding> ignored = new ArrayList<>();
         for (Statement statement : parsed.statements()) {
-            Optional<String> name = declared(statement).filter(names::contains);
+            Optional<String> name = copied(statement).flatMap(written -> names.stream()
+                    .filter(written::equalsIgnoreCase).findFirst()
+                    .map(loaded -> loaded.equals(written) ? "'" + loaded + "' is loaded data"
+                            : "'" + written + "' is the loaded table '" + loaded
+                                    + "' (names are case-insensitive)"));
             if (name.isPresent()) {
-                ignored.add(new Finding(Finding.WARNING, "'" + name.get() + "' is loaded data, "
-                        + "so this declaration of it was ignored and the loaded table read "
-                        + "instead. Leave the loaded tables out of the script.", null,
+                ignored.add(new Finding(Finding.WARNING, name.get() + ", so this declaration "
+                        + "of it was ignored and the loaded table read instead. Leave the "
+                        + "loaded tables out of the script.", null,
                         statement.location().line(), statement.location().column()));
             } else {
                 kept.add(statement);
             }
         }
         return new Prepared(new Script(parsed.namespace(), kept, parsed.comments()), ignored);
+    }
+
+    /** The table a statement declares, if it declares data: an inline table or a source. */
+    private static Optional<String> copied(Statement statement) {
+        return switch (statement) {
+            case AssignmentStatement assignment when assignment.body() instanceof InlineTableBody ->
+                    Optional.of(assignment.name());
+            case SourceDeclaration source -> Optional.of(source.name());
+            default -> Optional.empty();
+        };
     }
 
     /** The relation a statement declares, if it declares one. */

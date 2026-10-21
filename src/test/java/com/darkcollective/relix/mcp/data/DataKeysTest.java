@@ -90,6 +90,16 @@ class DataKeysTest {
     }
 
     @Test
+    void aTableLoadedInAnotherCaseReplacesTheOneTheKeyHolds() {
+        String key = keys.load("alice", null, ORDERS).key();
+
+        LoadReport report = keys.load("alice", key, "ORDERS := [\n| x |\n|---|\n| 1 |\n];");
+
+        assertThat(report.replaced()).containsExactly("Orders");
+        assertThat(report.tables()).extracting(LoadReport.Table::name).containsExactly("ORDERS");
+    }
+
+    @Test
     void aKeyAloneDescribesWhatItHolds() {
         String key = keys.load("alice", null, ORDERS + WORDS).key();
 
