@@ -360,8 +360,15 @@ def described(key: str, tables: list[dict]) -> str:
     return "\n".join(lines)
 
 
+# The tools that change what a data key holds. On the client path the harness loads the data
+# and the model only reads it: a model that called relix_load with the harness's key and a
+# table of its own replaced the suite's table for every later question on that server.
+CLIENT_ONLY = {"relix_load", "relix_unload"}
+
+
 def ask(item: dict, data: str, prompt: str, server: McpServer, args) -> dict:
-    tools = openai_tools(server.tools)
+    offered = [t for t in server.tools if args.data != "key" or t["name"] not in CLIENT_ONLY]
+    tools = openai_tools(offered)
     if args.data == "key":
         given = described(*server.load(item["suite"], data))
     else:
@@ -415,7 +422,7 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args) -> dict:
             if arguments is None:
                 result = {"content": [{"type": "text", "text": "The arguments were not valid JSON."}],
                           "isError": True}
-            elif name not in {t["name"] for t in server.tools}:
+            elif name not in {t["name"] for t in offered}:
                 result = {"content": [{"type": "text", "text": f"There is no tool called {name}."}],
                           "isError": True}
             else:
