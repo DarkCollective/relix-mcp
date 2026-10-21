@@ -2,6 +2,7 @@ package com.darkcollective.relix.mcp.http;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import io.modelcontextprotocol.common.McpTransportContext;
 import io.modelcontextprotocol.server.transport.DefaultServerTransportSecurityValidator;
 import io.modelcontextprotocol.server.transport.ServerTransportSecurityValidator;
 
@@ -12,6 +13,7 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -24,6 +26,10 @@ import java.util.concurrent.Executors;
  * {@code Origin} or {@code Host} names anything but this machine. That is the protocol's
  * defence against DNS rebinding, where a web page the user opened sends requests to a
  * server on their own machine under a hostname the page controls.
+ *
+ * <p>Bound to a loopback address, every request comes from this machine, and has the
+ * {@linkplain Authenticator#LOCAL local} owner, as one over standard input and output
+ * does. Bound to any other, the server cannot tell its callers apart, and they have none.
  */
 public final class LocalHttpServer implements AutoCloseable {
 
@@ -52,7 +58,11 @@ public final class LocalHttpServer implements AutoCloseable {
         HttpServer server = HttpServer.create(address, 0);
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         server.setExecutor(executor);
-        server.createContext(PATH, exchange -> serve(exchange, transport));
+        McpTransportContext context = address.getAddress() != null
+                && address.getAddress().isLoopbackAddress()
+                ? McpTransportContext.create(Map.of(Authenticator.OWNER, Authenticator.LOCAL))
+                : McpTransportContext.EMPTY;
+        server.createContext(PATH, exchange -> serve(exchange, transport, context));
         server.start();
         return new LocalHttpServer(server, executor);
     }
@@ -94,8 +104,8 @@ public final class LocalHttpServer implements AutoCloseable {
         executor.close();
     }
 
-    private static void serve(HttpExchange exchange, StatelessHttpTransport transport)
-            throws IOException {
+    private static void serve(HttpExchange exchange, StatelessHttpTransport transport,
+                              McpTransportContext context) throws IOException {
         try (exchange) {
             if (!PATH.equals(exchange.getRequestURI().getPath())) {
                 exchange.sendResponseHeaders(404, -1);
@@ -112,7 +122,7 @@ public final class LocalHttpServer implements AutoCloseable {
             }
             StatelessHttpTransport.Response response = transport.handle(
                     exchange.getRequestMethod(), exchange.getRequestHeaders(),
-                    body.isEmpty() ? null : body);
+                    body.isEmpty() ? null : body, context);
             response.headers().forEach(exchange.getResponseHeaders()::set);
             if (response.body() == null) {
                 exchange.sendResponseHeaders(response.status(), -1);

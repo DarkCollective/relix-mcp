@@ -3,6 +3,7 @@ package com.darkcollective.relix.mcp.offline;
 import com.darkcollective.relix.embed.Relation;
 import com.darkcollective.relix.embed.Relix;
 import com.darkcollective.relix.embed.RelixException;
+import com.darkcollective.relix.mcp.data.LoadedData;
 import com.darkcollective.relix.optimizer.TransformationRecord;
 
 import java.util.ArrayList;
@@ -38,16 +39,35 @@ public final class ScriptExplainer {
      * @return the plan of each query, or the findings that stopped the script
      */
     public ExplainReport explain(String script, Map<String, String> files, CallerCatalog catalog) {
+        return explain(script, files, catalog, LoadedData.NONE);
+    }
+
+    /**
+     * Explains a script over loaded data, defined and prepared as
+     * {@link ScriptValidator#validate(String, Map, CallerCatalog, LoadedData)} does.
+     *
+     * @param script  the script's text; must not be null
+     * @param files   the text of every file it imports
+     * @param catalog the tables of the connections it reads; must not be null
+     * @param data    the tables the script reads without declaring; {@link LoadedData#NONE}
+     *                for none
+     * @return the plan of each query, or the findings that stopped the script
+     */
+    public ExplainReport explain(String script, Map<String, String> files, CallerCatalog catalog,
+                                 LoadedData data) {
         Objects.requireNonNull(script, "script");
         // Validation first, so an invalid script gets every problem at once, placed, rather
         // than whichever one stopped the planner.
-        ValidationReport validation = validator.validate(script, files, catalog);
+        ValidationReport validation = validator.validate(script, files, catalog, data);
         if (!validation.valid()) {
             return new ExplainReport(false, validation.findings(), List.of());
         }
         List<QueryPlan> queries = new ArrayList<>();
         try (Relix relix = OfflineSession.open(ScriptFiles.of(files), catalog)) {
-            List<Relation> relations = relix.script(script);
+            data.define(relix);
+            LoadedData.Prepared prepared = data.prepare(script);
+            List<Relation> relations = prepared.script() != null
+                    ? relix.script(prepared.script()) : relix.script(script);
             List<String> names = QueryNames.of(script);
             for (int i = 0; i < relations.size(); i++) {
                 queries.add(plan(i < names.size() ? names.get(i) : null, relations.get(i)));

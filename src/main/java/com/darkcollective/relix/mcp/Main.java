@@ -1,6 +1,9 @@
 package com.darkcollective.relix.mcp;
 
 import com.darkcollective.relix.embed.Relix;
+import com.darkcollective.relix.mcp.data.DataKeys;
+import com.darkcollective.relix.mcp.data.InMemoryDataStore;
+import com.darkcollective.relix.mcp.http.Authenticator;
 import com.darkcollective.relix.mcp.http.LocalHttpServer;
 import com.darkcollective.relix.mcp.http.StatelessHttpTransport;
 import com.darkcollective.relix.mcp.run.ScriptRunner;
@@ -73,8 +76,17 @@ public final class Main {
             System.exit(2);
             return;
         }
+        DataKeys keys;
+        try {
+            keys = new DataKeys(new InMemoryDataStore(), DataKeys.maxKeys(System.getenv()));
+        } catch (IllegalStateException e) {
+            System.err.println("relix-mcp: " + e.getMessage());
+            System.exit(2);
+            return;
+        }
         if (options.http()) {
-            LocalHttpServer server = serveHttp(new InetSocketAddress(options.host(), options.port()));
+            LocalHttpServer server = serveHttp(new InetSocketAddress(options.host(), options.port()),
+                    keys);
             System.err.println("relix-mcp " + version() + " serving MCP at " + server.uri());
             Runtime.getRuntime().addShutdownHook(new Thread(server::close));
         } else {
@@ -83,10 +95,10 @@ public final class Main {
                     .serverInfo(serverInfo())
                     .instructions(INSTRUCTIONS)
                     .capabilities(ServerCapabilities.builder().tools(false).build())
-                    .tools(new Tools().all().stream().map(tool ->
+                    .tools(new Tools(new ScriptRunner(), keys).all().stream().map(tool ->
                             new McpServerFeatures.SyncToolSpecification(tool.tool(),
                                     (exchange, request) -> tool.call().apply(request,
-                                            () -> false))).toList())
+                                            Authenticator.LOCAL, () -> false))).toList())
                     .build();
             Runtime.getRuntime().addShutdownHook(new Thread(server::closeGracefully));
         }
@@ -101,9 +113,21 @@ public final class Main {
      * @throws IOException if the address cannot be bound
      */
     static LocalHttpServer serveHttp(InetSocketAddress address) throws IOException {
+        return serveHttp(address, new DataKeys(new InMemoryDataStore(), DataKeys.DEFAULT_MAX_KEYS));
+    }
+
+    /**
+     * Serves the tools over HTTP at {@code address}, keeping loaded data in {@code keys}.
+     *
+     * @param address where to listen; port 0 picks a free one
+     * @param keys    where {@code relix_load} keeps data
+     * @return the running server, which the caller closes
+     * @throws IOException if the address cannot be bound
+     */
+    static LocalHttpServer serveHttp(InetSocketAddress address, DataKeys keys) throws IOException {
         StatelessHttpTransport transport = new StatelessHttpTransport(McpJsonDefaults.getMapper(),
                 LocalHttpServer.securityFor(address.getAddress()));
-        statelessServer(transport);
+        statelessServer(transport, new ScriptRunner(), keys);
         return LocalHttpServer.start(address, transport);
     }
 
@@ -129,11 +153,27 @@ public final class Main {
      */
     public static McpStatelessSyncServer statelessServer(StatelessHttpTransport transport,
                                                          ScriptRunner runner) {
+        return statelessServer(transport, runner, null);
+    }
+
+    /**
+     * The tools, served statelessly over {@code transport}, {@code relix_run} with
+     * {@code runner}'s limits, and loaded data kept in {@code keys}. A call whose request
+     * carries a {@link Deadline} answers by it, and one whose request carries an
+     * {@linkplain Authenticator#OWNER owner} reads that owner's data.
+     *
+     * @param transport carries the requests; the server registers itself as its handler
+     * @param runner    runs the scripts {@code relix_run} is given
+     * @param keys      where {@code relix_load} keeps data, or null to offer no loading
+     * @return the server
+     */
+    public static McpStatelessSyncServer statelessServer(StatelessHttpTransport transport,
+                                                         ScriptRunner runner, DataKeys keys) {
         return McpServer.sync(transport)
                 .serverInfo(serverInfo())
                 .instructions(INSTRUCTIONS)
                 .capabilities(ServerCapabilities.builder().tools(false).build())
-                .tools(new Tools(runner).all().stream().map(tool ->
+                .tools(new Tools(runner, keys).all().stream().map(tool ->
                         new McpStatelessServerFeatures.SyncToolSpecification(tool.tool(),
                                 (context, request) -> Deadline.call(tool, request, context)))
                         .toList())

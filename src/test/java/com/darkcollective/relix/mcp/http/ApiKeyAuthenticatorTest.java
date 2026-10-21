@@ -45,4 +45,16 @@ class ApiKeyAuthenticatorTest {
     void allowAllRefusesNoOne() {
         assertThat(Authenticator.allowAll().refusal(Map.of())).isEmpty();
     }
+
+    @Test
+    void theOwnerIsAHashOfTheKeyAndNeverTheKey() {
+        ApiKeyAuthenticator authenticator = new ApiKeyAuthenticator("s3cret-key");
+
+        assertThat(authenticator.owner(Map.of("X-Api-Key", List.of("s3cret-key"))))
+                .hasValueSatisfying(owner -> assertThat(owner).matches("[0-9a-f]{64}")
+                        .doesNotContain("s3cret"));
+        assertThat(authenticator.owner(Map.of("X-Api-Key", List.of("wrong")))).isEmpty();
+        assertThat(authenticator.owner(Map.of())).isEmpty();
+        assertThat(Authenticator.allowAll().owner(Map.of())).isEmpty();
+    }
 }

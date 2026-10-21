@@ -6,6 +6,7 @@ import com.darkcollective.relix.embed.Relix;
 import com.darkcollective.relix.embed.RelixException;
 import com.darkcollective.relix.embed.Rows;
 import com.darkcollective.relix.embed.Sandbox;
+import com.darkcollective.relix.mcp.data.LoadedData;
 import com.darkcollective.relix.mcp.offline.Finding;
 import com.darkcollective.relix.mcp.offline.QueryNames;
 import com.darkcollective.relix.mcp.offline.SessionClock;
@@ -13,6 +14,7 @@ import com.darkcollective.relix.mcp.offline.SessionClock;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.BooleanSupplier;
@@ -131,20 +133,52 @@ public final class ScriptRunner {
      * @return the findings, or each finished query's rows, or what stopped a query
      */
     public RunReport run(String script, BooleanSupplier stopped) {
+        return run(script, LoadedData.NONE, stopped);
+    }
+
+    /**
+     * Validates the script over loaded data, and when it is valid, runs its queries until
+     * {@code stopped} says to stop.
+     *
+     * <p>The data is defined in the sandboxed session as statements, and the script run on
+     * its own, as {@link com.darkcollective.relix.mcp.offline.ScriptValidator} checks it: a
+     * declaration in it of a loaded table is left out with a warning, and the data's own
+     * warnings are left out, because {@code relix_load} reported them.
+     *
+     * @param script  the script's text; must not be null
+     * @param data    the tables the script reads without declaring; {@link LoadedData#NONE}
+     *                for none
+     * @param stopped whether to stop; checked before each query and when one fails
+     * @return the findings, or each finished query's rows, or what stopped a query
+     */
+    public RunReport run(String script, LoadedData data, BooleanSupplier stopped) {
         Objects.requireNonNull(script, "script");
+        Objects.requireNonNull(data, "data");
         Objects.requireNonNull(stopped, "stopped");
-        List<Finding> findings = new ArrayList<>();
+        LoadedData.Prepared prepared = data.prepare(script);
+        List<Finding> findings = new ArrayList<>(prepared.ignored());
         List<QueryResult> results = new ArrayList<>();
         try (Relix relix = Relix.builder().sandbox(sandbox).clock(clock).build()) {
+            data.define(relix);
             // Validation first: the sandbox's refusals are diagnostics there, with the rest
             // of what is wrong, where running would stop at the first.
-            for (Diagnostic diagnostic : relix.validate(script)) {
+            List<Diagnostic> diagnostics = prepared.script() != null
+                    ? relix.validate(prepared.script()) : relix.validate(script);
+            for (Diagnostic diagnostic : diagnostics) {
+                if (data.isAbout(diagnostic)) {
+                    if (diagnostic.isError()) {
+                        findings.add(Finding.of(diagnostic, LoadedData.LABEL::equals));
+                    }
+                    continue;
+                }
                 findings.add(Finding.of(diagnostic, path -> false));
             }
             if (findings.stream().anyMatch(Finding::isError)) {
+                findings.sort(Comparator.comparing(Finding::isError).reversed());
                 return RunReport.invalid(findings);
             }
-            List<Relation> queries = relix.script(script);
+            List<Relation> queries = prepared.script() != null
+                    ? relix.script(prepared.script()) : relix.script(script);
             List<String> names = QueryNames.of(script);
             for (int i = 0; i < queries.size(); i++) {
                 String name = i < names.size() ? names.get(i) : null;

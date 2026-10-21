@@ -1,5 +1,6 @@
 package com.darkcollective.relix.mcp.offline;
 
+import com.darkcollective.relix.mcp.data.LoadedData;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -79,6 +80,30 @@ class NothingIsOpenedTest {
 
         assertThat(report.render()).contains("unknown");
         assertThat(explained.queries()).hasSize(2).allSatisfy(q -> assertThat(q.planned()).isTrue());
+        assertThat(connects).hasValue(0);
+    }
+
+    @Test
+    void loadedDataOpensNothingEither() {
+        LoadedData data = LoadedData.of("""
+                Ids := [
+                | id |
+                |----|
+                | 1  |
+                ];
+                """);
+        String script = """
+                connection wh from jdbc { url: "jdbc:counting:wh" };
+                query { Ids JOIN wh.customers };
+                """;
+        CallerCatalog catalog = CallerCatalog.of(Map.of("wh",
+                Map.of("customers", Map.of("id", "NUMBER", "name", "STRING"))));
+
+        ValidationReport report = validator.validate(script, Map.of(), catalog, data);
+        ExplainReport explained = explainer.explain(script, Map.of(), catalog, data);
+
+        assertThat(report.valid()).as(report.render()).isTrue();
+        assertThat(explained.queries()).singleElement().satisfies(q -> assertThat(q.planned()).isTrue());
         assertThat(connects).hasValue(0);
     }
 

@@ -28,7 +28,11 @@ them over their own inline data, and reads the language reference. The Relix eng
   counts connections, requests and file reads for both.
 - **`relix_run` executes only inside a closed sandbox with no declarations.** It accepts inline
   tables, views, functions and generators, and refuses every file, database, HTTP source,
-  connection and import. Never widen it with an open session.
+  connection and import. Never widen it with an open session. Data from `relix_load` is
+  inline tables only (`LoadedData.of` refuses anything else), defined in the session as
+  parsed statements, never pasted in front of the script.
+- **Loaded data lives only behind `DataStore`**, under an owner the `Authenticator` names
+  (a hash, never a credential). A lookup under another owner finds nothing.
 - **Tools are transport-neutral.** A tool is a `Tools.Definition` (a `Tool` and a
   function from request to result); `Main` adapts it to the SDK's stdio and stateless
   specifications. `StatelessHttpTransport` is a function from an HTTP request to a

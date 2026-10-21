@@ -81,8 +81,12 @@ public record QueryResult(String name, List<String> columns, List<String> types,
         return new QueryResult(name, List.of(), List.of(), List.of(), List.of(), false, failure);
     }
 
-    /** A type as a script declares it: {@code STRING}, not the engine's {@code string}. */
-    private static String spelling(Type type) {
+    /**
+     * {@return a type as a script declares it: {@code STRING}, not the engine's {@code string}}
+     *
+     * @param type a column's type
+     */
+    public static String spelling(Type type) {
         return type instanceof ScalarType scalar ? scalar.name() : type.display();
     }
 

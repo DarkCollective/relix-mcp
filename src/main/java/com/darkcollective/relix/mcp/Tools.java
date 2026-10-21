@@ -1,6 +1,11 @@
 package com.darkcollective.relix.mcp;
 
 import com.darkcollective.relix.docs.ReferencePage;
+import com.darkcollective.relix.mcp.data.DataKeys;
+import com.darkcollective.relix.mcp.data.LoadReport;
+import com.darkcollective.relix.mcp.data.LoadedData;
+import com.darkcollective.relix.mcp.data.StoredData;
+import com.darkcollective.relix.mcp.http.Authenticator;
 import com.darkcollective.relix.mcp.run.QueryResult;
 import com.darkcollective.relix.mcp.run.RunReport;
 import com.darkcollective.relix.mcp.run.ScriptRunner;
@@ -17,20 +22,25 @@ import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
 import io.modelcontextprotocol.spec.McpSchema.ToolAnnotations;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
  * The server's tools: {@code relix_validate}, {@code relix_explain}, {@code relix_run}, {@code relix_submit} and
- * {@code relix_learn}.
+ * {@code relix_learn}, and, on a server that keeps loaded data, {@code relix_load} and
+ * {@code relix_unload}.
  *
  * <p>Each is a plain function from arguments to a result, so it is the same whichever
- * transport carries it, and a test calls it without one.
+ * transport carries it, and a test calls it without one. The one thing a tool learns
+ * about its caller is the <em>owner</em> its authenticator named, which is whose loaded
+ * data it may read.
  */
 final class Tools {
 
@@ -60,10 +70,12 @@ final class Tools {
 
         /**
          * @param request the call
+         * @param owner   whose loaded data the call may read, or null when the server
+         *                cannot tell its callers apart
          * @param stopped whether the call's deadline has passed
          * @return the answer
          */
-        CallToolResult apply(CallToolRequest request, BooleanSupplier stopped);
+        CallToolResult apply(CallToolRequest request, String owner, BooleanSupplier stopped);
     }
 
     /** A {@code stopped} that never stops. */
@@ -231,65 +243,126 @@ final class Tools {
     static final String SUBMITTED = "Submitted. Show the user everything below this line "
             + "unchanged, as your answer: the script, and the rows the engine returned for it.";
 
+    private static final String LOAD_DESCRIPTION = """
+            Loads inline tables once, so that scripts read them by a data key instead of \
+            declaring them in every call. Send their declarations, each Name := [ ... ];, as \
+            'tables'; nothing else can be loaded. It checks them, and returns the key, each \
+            table's columns, types and row count, and every warning about the data in full: \
+            later results only say how many there are.
+
+            Pass the key as 'data' to 'relix_validate', 'relix_run', 'relix_submit' and \
+            'relix_explain', and leave the loaded tables out of the script: a declaration \
+            of one there is ignored, with a warning. Send 'key' with 'tables' to add tables \
+            to a key, replacing any it holds by the same name, or 'key' alone to see what \
+            it holds. A key lasts an hour from its last use. A caller may hold %d at once; \
+            'relix_unload' releases one.""";
+
+    private static final String UNLOAD_DESCRIPTION = """
+            Releases a data key from 'relix_load' before it expires, with the tables it \
+            holds. Release a key once its tables are no longer needed: a caller may hold \
+            only so many at once.""";
+
+    /** What a script tool's description ends with on a server that keeps loaded data. */
+    static final String DATA_NOTE = "\n\nTo read tables loaded with 'relix_load', pass their "
+            + "key as 'data' and leave their declarations out of the script.";
+
     private final ScriptValidator validator = new ScriptValidator();
     private final ScriptRunner runner;
     private final ScriptExplainer explainer = new ScriptExplainer();
     private final Reference reference = new Reference();
+    private final DataKeys keys;
 
     /**
-     * The tools, {@code relix_run} with the {@linkplain ScriptRunner#DEFAULT_SANDBOX default limits}.
+     * The tools, {@code relix_run} with the {@linkplain ScriptRunner#DEFAULT_SANDBOX default
+     * limits}, keeping no loaded data.
      */
     Tools() {
         this(new ScriptRunner());
     }
 
     /**
-     * The tools, {@code relix_run} with {@code runner}'s limits.
+     * The tools, {@code relix_run} with {@code runner}'s limits, keeping no loaded data.
      *
      * @param runner runs the scripts {@code relix_run} is given
      */
     Tools(ScriptRunner runner) {
+        this(runner, null);
+    }
+
+    /**
+     * The tools, {@code relix_run} with {@code runner}'s limits, keeping loaded data in
+     * {@code keys}.
+     *
+     * @param runner runs the scripts {@code relix_run} is given
+     * @param keys   where {@code relix_load} keeps data, or null for a server that keeps
+     *               none, and so offers neither it nor a {@code data} argument
+     */
+    Tools(ScriptRunner runner, DataKeys keys) {
         this.runner = runner;
+        this.keys = keys;
     }
 
     /**
      * {@return every tool the server offers}
      */
     List<Definition> all() {
-        return List.of(validateTool(), explainTool(), runTool(), submitTool(), learnTool());
+        List<Definition> all = new ArrayList<>(List.of(validateTool(), explainTool(), runTool(),
+                submitTool(), learnTool()));
+        if (keys != null) {
+            all.add(loadTool());
+            all.add(unloadTool());
+        }
+        return List.copyOf(all);
+    }
+
+    /**
+     * A script tool's arguments: the script, and the key of the loaded data it reads, on a
+     * server that keeps any.
+     */
+    private Map<String, Object> scriptSchema(String scriptDescription, Map<String, Object> more) {
+        Map<String, Object> properties = new LinkedHashMap<>();
+        properties.put("script", Map.of("type", "string", "description", scriptDescription));
+        properties.putAll(more);
+        if (keys != null) {
+            properties.put("data", Map.of("type", "string",
+                    "description", "a data key from relix_load: the script reads the tables "
+                            + "loaded under it without declaring them"));
+        }
+        return Map.of("type", "object", "properties", properties, "required", List.of("script"));
     }
 
     /**
      * The arguments both offline tools take: the script, the files it imports, and the
      * tables of its connections.
      */
-    private static Map<String, Object> offlineSchema(String scriptDescription) {
+    private Map<String, Object> offlineSchema(String scriptDescription) {
         String types = Arrays.stream(ScalarType.values()).map(Enum::name)
                 .collect(Collectors.joining("\", \""));
         Map<String, Object> column = Map.of("type", "string",
                 "description", "a column type: \"" + types + "\"");
-        return Map.of(
-                "type", "object",
-                "properties", Map.of(
-                        "script", Map.of("type", "string", "description", scriptDescription),
-                        "files", Map.of("type", "object",
-                                "description", "the text of each file the script imports, "
-                                        + "keyed by the path its import statement writes",
-                                "additionalProperties", Map.of("type", "string")),
-                        "catalog", Map.of("type", "object",
-                                "description", "the tables of the script's database "
-                                        + "connections: connection name, then table name, "
-                                        + "then column name to type",
+        return scriptSchema(scriptDescription, Map.of(
+                "files", Map.of("type", "object",
+                        "description", "the text of each file the script imports, "
+                                + "keyed by the path its import statement writes",
+                        "additionalProperties", Map.of("type", "string")),
+                "catalog", Map.of("type", "object",
+                        "description", "the tables of the script's database "
+                                + "connections: connection name, then table name, "
+                                + "then column name to type",
+                        "additionalProperties", Map.of("type", "object",
                                 "additionalProperties", Map.of("type", "object",
-                                        "additionalProperties", Map.of("type", "object",
-                                                "additionalProperties", column)))),
-                "required", List.of("script"));
+                                        "additionalProperties", column)))));
+    }
+
+    /** A script tool's description, with how to read loaded data on a server that keeps it. */
+    private String withData(String description) {
+        return keys == null ? description : description + DATA_NOTE;
     }
 
     Definition validateTool() {
         Tool tool = Tool.builder("relix_validate", offlineSchema("the Relix script to check"))
                 .title("Validate a Relix script")
-                .description(VALIDATE_DESCRIPTION)
+                .description(withData(VALIDATE_DESCRIPTION))
                 .annotations(readOnly("Validate a Relix script"))
                 .build();
         return new Definition(tool, this::validate);
@@ -298,38 +371,65 @@ final class Tools {
     Definition explainTool() {
         Tool tool = Tool.builder("relix_explain", offlineSchema("the Relix script to explain"))
                 .title("Explain how a Relix script would run")
-                .description(EXPLAIN_DESCRIPTION)
+                .description(withData(EXPLAIN_DESCRIPTION))
                 .annotations(readOnly("Explain how a Relix script would run"))
                 .build();
         return new Definition(tool, this::explain);
     }
 
     Definition runTool() {
-        Map<String, Object> schema = Map.of(
-                "type", "object",
-                "properties", Map.of("script", Map.of("type", "string",
-                        "description", "the Relix script to run; its data must be inline tables")),
-                "required", List.of("script"));
-        Tool tool = Tool.builder("relix_run", schema)
+        Tool tool = Tool.builder("relix_run", scriptSchema("the Relix script to run; its data "
+                        + "must be inline tables" + (keys == null ? "" : ", or loaded ones named by 'data'"),
+                        Map.of()))
                 .title("Run a Relix script over its own data")
-                .description(runDescription())
+                .description(withData(runDescription()))
                 .annotations(readOnly("Run a Relix script over its own data"))
                 .build();
         return new Definition(tool, this::run);
     }
 
     Definition submitTool() {
-        Map<String, Object> schema = Map.of(
-                "type", "object",
-                "properties", Map.of("script", Map.of("type", "string",
-                        "description", "the finished Relix script; its data must be inline tables")),
-                "required", List.of("script"));
-        Tool tool = Tool.builder("relix_submit", schema)
+        Tool tool = Tool.builder("relix_submit", scriptSchema("the finished Relix script; its "
+                        + "data must be inline tables" + (keys == null ? "" : ", or loaded ones named by 'data'"),
+                        Map.of()))
                 .title("Submit a finished Relix script with its results")
-                .description(SUBMIT_DESCRIPTION)
+                .description(withData(SUBMIT_DESCRIPTION))
                 .annotations(readOnly("Submit a finished Relix script with its results"))
                 .build();
         return new Definition(tool, this::submit);
+    }
+
+    Definition loadTool() {
+        Map<String, Object> schema = Map.of(
+                "type", "object",
+                "properties", Map.of(
+                        "tables", Map.of("type", "string",
+                                "description", "the inline tables to load, each written "
+                                        + "Name := [ ... ];"),
+                        "key", Map.of("type", "string",
+                                "description", "a data key you hold: the tables are added to "
+                                        + "it; alone, it shows what the key holds")));
+        Tool tool = Tool.builder("relix_load", schema)
+                .title("Load inline tables once, to read by a data key")
+                .description(LOAD_DESCRIPTION.formatted(keys.maxKeys()))
+                .annotations(new ToolAnnotations("Load inline tables once, to read by a data key",
+                        false, false, false, false, null))
+                .build();
+        return new Definition(tool, this::load);
+    }
+
+    Definition unloadTool() {
+        Map<String, Object> schema = Map.of(
+                "type", "object",
+                "properties", Map.of("key", Map.of("type", "string",
+                        "description", "the data key to release")),
+                "required", List.of("key"));
+        Tool tool = Tool.builder("relix_unload", schema)
+                .title("Release a data key")
+                .description(UNLOAD_DESCRIPTION)
+                .annotations(new ToolAnnotations("Release a data key", false, true, true, false, null))
+                .build();
+        return new Definition(tool, this::unload);
     }
 
     /**
@@ -394,7 +494,7 @@ final class Tools {
                 .description(learnDescription())
                 .annotations(readOnly("Read the Relix reference"))
                 .build();
-        return new Definition(tool, (request, stopped) -> learn(request));
+        return new Definition(tool, (request, owner, stopped) -> learn(request));
     }
 
     /** The two lengths {@code relix_learn} serves a page at. */
@@ -440,38 +540,106 @@ final class Tools {
         }
     }
 
-    CallToolResult validate(CallToolRequest request) {
-        return validate(request, NEVER);
+    /**
+     * The loaded data a script tool's call names, as its {@code data} argument.
+     *
+     * @param key    the data key, or null when the call names none
+     * @param data   the tables, parsed
+     * @param stored what the key holds, or null when the call names none
+     */
+    private record Named(String key, LoadedData data, StoredData stored) {
+
+        static final Named NONE = new Named(null, LoadedData.NONE, null);
+
+        /** The line a result over this data carries about its warnings, or null for none. */
+        String warningsLine() {
+            return stored == null ? null : stored.warningsLine();
+        }
+
+        /** {@code text}, with the data's warnings line after it when there is one. */
+        String after(String text) {
+            String line = warningsLine();
+            return line == null ? text : text + "\n\n" + line;
+        }
+
+        /** Adds the warnings line to a result's data, when there is one. */
+        Map<String, Object> into(Map<String, Object> data) {
+            String line = warningsLine();
+            if (line != null) {
+                data.put("dataWarnings", line);
+            }
+            return data;
+        }
     }
 
-    CallToolResult validate(CallToolRequest request, BooleanSupplier stopped) {
+    /**
+     * Reads a script tool's {@code data} argument and finds what it names.
+     *
+     * @return the data, {@link Named#NONE} when the call names none, or a tool error
+     */
+    private Object named(CallToolRequest request, String owner) {
+        Object key = request.arguments() == null ? null : request.arguments().get("data");
+        if (key == null) {
+            return Named.NONE;
+        }
+        if (keys == null || owner == null) {
+            return failure("This server holds no loaded data, so 'data' cannot be used: "
+                    + "declare the tables in the script, as inline tables.");
+        }
+        if (!(key instanceof String sent) || sent.isBlank()) {
+            return failure("'data' is a data key from 'relix_load', as a string.");
+        }
+        Optional<StoredData> stored = keys.find(owner, sent.strip());
+        if (stored.isEmpty()) {
+            return failure(DataKeys.notFound(sent.strip()));
+        }
+        return new Named(sent.strip(), LoadedData.of(stored.get().declarations()), stored.get());
+    }
+
+    CallToolResult validate(CallToolRequest request) {
+        return validate(request, Authenticator.LOCAL, NEVER);
+    }
+
+    CallToolResult validate(CallToolRequest request, String owner, BooleanSupplier stopped) {
         Object parsed = offlineRequest(request, "check");
         if (!(parsed instanceof OfflineRequest asked)) {
             return (CallToolResult) parsed;
         }
-        ValidationReport report = validator.validate(asked.script(), asked.files(), asked.catalog());
+        Object found = named(request, owner);
+        if (!(found instanceof Named named)) {
+            return (CallToolResult) found;
+        }
+        ValidationReport report = validator.validate(asked.script(), asked.files(), asked.catalog(),
+                named.data());
         if (stopped.getAsBoolean()) {
             return NOTHING_FINISHED;
         }
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("valid", report.valid());
+        data.put("findings", report.findings().stream().map(Tools::asData).toList());
         return CallToolResult.builder()
-                .addTextContent(report.valid() ? report.render(sources(asked))
+                .addTextContent(named.after(report.valid() ? report.render(sources(asked, named))
                         : ForeignCode.lead(asked.script(),
-                                report.render(sources(asked)) + "\n" + REVALIDATE))
-                .structuredContent(Map.of("valid", report.valid(), "findings",
-                        report.findings().stream().map(Tools::asData).toList()))
+                                report.render(sources(asked, named)) + "\n" + REVALIDATE)))
+                .structuredContent(named.into(data))
                 .build();
     }
 
     CallToolResult explain(CallToolRequest request) {
-        return explain(request, NEVER);
+        return explain(request, Authenticator.LOCAL, NEVER);
     }
 
-    CallToolResult explain(CallToolRequest request, BooleanSupplier stopped) {
+    CallToolResult explain(CallToolRequest request, String owner, BooleanSupplier stopped) {
         Object parsed = offlineRequest(request, "explain");
         if (!(parsed instanceof OfflineRequest asked)) {
             return (CallToolResult) parsed;
         }
-        ExplainReport report = explainer.explain(asked.script(), asked.files(), asked.catalog());
+        Object found = named(request, owner);
+        if (!(found instanceof Named named)) {
+            return (CallToolResult) found;
+        }
+        ExplainReport report = explainer.explain(asked.script(), asked.files(), asked.catalog(),
+                named.data());
         if (stopped.getAsBoolean()) {
             return NOTHING_FINISHED;
         }
@@ -480,30 +648,34 @@ final class Tools {
         data.put("findings", report.findings().stream().map(Tools::asData).toList());
         data.put("queries", report.queries().stream().map(Tools::asData).toList());
         return CallToolResult.builder()
-                .addTextContent(report.valid() ? report.render(sources(asked))
-                        : ForeignCode.lead(asked.script(), report.render(sources(asked))))
-                .structuredContent(data)
+                .addTextContent(named.after(report.valid() ? report.render(sources(asked, named))
+                        : ForeignCode.lead(asked.script(), report.render(sources(asked, named)))))
+                .structuredContent(named.into(data))
                 .build();
     }
 
     CallToolResult run(CallToolRequest request) {
-        return run(request, NEVER);
+        return run(request, Authenticator.LOCAL, NEVER);
     }
 
-    CallToolResult run(CallToolRequest request, BooleanSupplier stopped) {
+    CallToolResult run(CallToolRequest request, String owner, BooleanSupplier stopped) {
         Object script = request.arguments() == null ? null : request.arguments().get("script");
         if (!(script instanceof String text)) {
             return failure("'script' is required: the text of the Relix script to run.");
         }
-        RunReport report = runner.run(text, stopped);
+        Object found = named(request, owner);
+        if (!(found instanceof Named named)) {
+            return (CallToolResult) found;
+        }
+        RunReport report = runner.run(text, named.data(), stopped);
         if (report.stopped() && report.results().isEmpty()) {
             return NOTHING_FINISHED;
         }
-        String rendered = report.render(scriptOnly(text));
+        String rendered = report.render(scriptOnly(text, named));
         return CallToolResult.builder()
-                .addTextContent(!report.valid() ? ForeignCode.lead(text, rendered)
-                        : ranToTheEnd(report) ? rendered + "\n\n" + SUBMIT_REMINDER : rendered)
-                .structuredContent(asData(report))
+                .addTextContent(named.after(!report.valid() ? ForeignCode.lead(text, rendered)
+                        : ranToTheEnd(report) ? rendered + "\n\n" + SUBMIT_REMINDER : rendered))
+                .structuredContent(named.into(asData(report)))
                 .build();
     }
 
@@ -523,7 +695,7 @@ final class Tools {
     }
 
     CallToolResult submit(CallToolRequest request) {
-        return submit(request, NEVER);
+        return submit(request, Authenticator.LOCAL, NEVER);
     }
 
     /**
@@ -536,12 +708,16 @@ final class Tools {
      * read whatever the model says afterwards. Only a valid script that ran to the end is
      * submitted.
      */
-    CallToolResult submit(CallToolRequest request, BooleanSupplier stopped) {
+    CallToolResult submit(CallToolRequest request, String owner, BooleanSupplier stopped) {
         Object script = request.arguments() == null ? null : request.arguments().get("script");
         if (!(script instanceof String text)) {
             return failure("'script' is required: the text of the finished Relix script.");
         }
-        RunReport report = runner.run(text, stopped);
+        Object found = named(request, owner);
+        if (!(found instanceof Named named)) {
+            return (CallToolResult) found;
+        }
+        RunReport report = runner.run(text, named.data(), stopped);
         if (report.stopped() && report.results().isEmpty()) {
             return NOTHING_FINISHED;
         }
@@ -549,34 +725,102 @@ final class Tools {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("submitted", submitted);
         data.put("script", text);
+        if (named.key() != null) {
+            data.put("data", named.key());
+        }
         data.putAll(asData(report));
+        String rendered = report.render(scriptOnly(text, named));
         String answer = submitted
-                ? SUBMITTED + "\n\n" + fenced(text) + "\n\n" + report.render(scriptOnly(text))
+                ? SUBMITTED + "\n\n" + fenced(text) + "\n\n" + rendered
                 : "Not submitted: " + (report.valid()
                         ? "the run was stopped before every query finished. Make the script "
                                 + "cheaper, then call 'relix_submit' again."
                         : "fix these, then call 'relix_submit' again on the fixed script.")
-                        + "\n\n" + report.render(scriptOnly(text));
+                        + "\n\n" + rendered;
         if (!report.valid()) {
             answer = ForeignCode.lead(text, answer);
         }
         return CallToolResult.builder()
-                .addTextContent(answer)
-                .structuredContent(data)
+                .addTextContent(named.after(answer))
+                .structuredContent(named.into(data))
                 .build();
     }
 
+    CallToolResult load(CallToolRequest request) {
+        return load(request, Authenticator.LOCAL, NEVER);
+    }
+
     /**
-     * The text each finding of an offline request points into: the script, or an imported
-     * file the caller sent, so a finding is shown with its source line.
+     * Checks inline tables and holds them under a data key, or adds them to one, or
+     * describes what one holds.
      */
-    private static Function<String, String> sources(OfflineRequest asked) {
-        return file -> file == null ? asked.script() : asked.files().get(file);
+    CallToolResult load(CallToolRequest request, String owner, BooleanSupplier stopped) {
+        if (owner == null) {
+            return failure(NO_OWNER);
+        }
+        Map<String, Object> args = request.arguments() == null ? Map.of() : request.arguments();
+        if (args.get("tables") != null && !(args.get("tables") instanceof String)) {
+            return failure("'tables' is the text of the inline tables to load, as a string.");
+        }
+        if (args.get("key") != null && !(args.get("key") instanceof String)) {
+            return failure("'key' is a data key from 'relix_load', as a string.");
+        }
+        String key = args.get("key") instanceof String sent && !sent.isBlank() ? sent.strip() : null;
+        LoadReport report = keys.load(owner, key, (String) args.get("tables"));
+        if (stopped.getAsBoolean()) {
+            return NOTHING_FINISHED;
+        }
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("loaded", report.loaded());
+        data.put("key", report.key());
+        data.put("tables", report.tables().stream().map(Tools::asData).toList());
+        data.put("replaced", report.replaced());
+        data.put("findings", report.findings().stream().map(Tools::asData).toList());
+        return CallToolResult.builder()
+                .addTextContent(report.render())
+                .structuredContent(data)
+                .isError(!report.loaded())
+                .build();
+    }
+
+    CallToolResult unload(CallToolRequest request) {
+        return unload(request, Authenticator.LOCAL, NEVER);
+    }
+
+    CallToolResult unload(CallToolRequest request, String owner, BooleanSupplier stopped) {
+        if (owner == null) {
+            return failure(NO_OWNER);
+        }
+        Object key = request.arguments() == null ? null : request.arguments().get("key");
+        if (!(key instanceof String sent) || sent.isBlank()) {
+            return failure("'key' is required: the data key to release.");
+        }
+        boolean released = keys.unload(owner, sent.strip());
+        return CallToolResult.builder()
+                .addTextContent(released ? "Released the data key " + sent.strip() + "."
+                        : DataKeys.notFound(sent.strip()))
+                .structuredContent(Map.of("released", released))
+                .build();
+    }
+
+    /** What a data tool tells a caller the server cannot tell apart from any other. */
+    static final String NO_OWNER = "This server cannot tell its callers apart, so it holds no "
+            + "data for them: declare the tables in the script, as inline tables.";
+
+    /**
+     * The text each finding of an offline request points into: the script, an imported
+     * file the caller sent, or the loaded data, so a finding is shown with its source line.
+     */
+    private static Function<String, String> sources(OfflineRequest asked, Named named) {
+        return file -> file == null ? asked.script()
+                : named.key() != null && LoadedData.LABEL.equals(file) ? named.data().text()
+                : asked.files().get(file);
     }
 
     /** The same for a script run on its own, which imports nothing. */
-    private static Function<String, String> scriptOnly(String script) {
-        return file -> file == null ? script : null;
+    private static Function<String, String> scriptOnly(String script, Named named) {
+        return file -> file == null ? script
+                : LoadedData.LABEL.equals(file) ? named.data().text() : null;
     }
 
     /** A script as a fenced code block, its fence longer than any run of backticks in it. */
@@ -651,6 +895,16 @@ final class Tools {
         data.put("file", finding.file());
         data.put("line", finding.line());
         data.put("column", finding.column());
+        return data;
+    }
+
+    /** A loaded table as the JSON object a client receives. */
+    private static Map<String, Object> asData(LoadReport.Table table) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("name", table.name());
+        data.put("rows", table.rows());
+        data.put("columns", table.columns());
+        data.put("types", table.types());
         return data;
     }
 

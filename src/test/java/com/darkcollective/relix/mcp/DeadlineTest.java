@@ -62,7 +62,7 @@ class DeadlineTest {
     void workThatIgnoresTheInterruptIsAnsweredAfterTheGrace() throws InterruptedException {
         CountDownLatch release = new CountDownLatch(1);
         Tools.Definition stubborn = new Tools.Definition(Tool.builder("stubborn", Map.of()).build(),
-                (request, stopped) -> {
+                (request, owner, stopped) -> {
                     while (true) {
                         try {
                             if (release.await(10, TimeUnit.MILLISECONDS)) {
@@ -96,7 +96,7 @@ class DeadlineTest {
     void aRequestWithNoDeadlineRunsOnTheCallersThread() {
         Thread caller = Thread.currentThread();
         Tools.Definition where = new Tools.Definition(Tool.builder("where", Map.of()).build(),
-                (request, stopped) -> CallToolResult.builder()
+                (request, owner, stopped) -> CallToolResult.builder()
                         .addTextContent(String.valueOf(Thread.currentThread() == caller)).build());
 
         assertThat(text(Deadline.call(where, CallToolRequest.builder("where").build(),
