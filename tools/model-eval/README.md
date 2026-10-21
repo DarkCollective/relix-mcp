@@ -80,7 +80,14 @@ Each run writes `runs/<timestamp>/`:
 
 A question passes (`match`) when the rows of one of the queries `relix_submit` ran
 equal the gold query's rows over the same data, as a multiset. Any one of them: a
-model asked for "all details" of something often adds a query per related table. Columns are matched by their
+model asked for "all details" of something often adds a query per related table.
+
+A question that leaves a choice open (sample or population variance, a joined string's
+separator) lists the gold of each other reading it accepts in `also_accepted`, and
+matching any of them passes. `results.jsonl` records which in `accepted_reading` (0 for
+the canonical gold), and the summary counts the passes on another reading.
+
+Columns are matched by their
 values, so the model's column names and order don't matter. `extra_columns`
 means the gold's rows were all there with more columns than asked for;
 `mismatch` means different rows; `data_altered` means different rows from a script whose copy of a table it reads differs from the data given (the model retyped it), kept apart from a wrong query; it arises only with `--data inline`, since over a data key the server ignores a table the script declares again; `right_not_submitted` means the model never submitted, but one of its `relix_run` calls returned the right rows (the summary says which call), so it solved the question and failed only to finish; `no_submit` means it never submitted and no run of it was right. The summary's "right rows reached" counts `match`, `extra_columns` and `right_not_submitted`.

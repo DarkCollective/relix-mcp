@@ -174,7 +174,10 @@ def load_suite(suites_dir: str, name: str) -> tuple[str, list[dict]]:
         match = _EXPRESSION.search(query["output"])
         items.append({"suite": name, "index": index, "category": query.get("category", ""),
                       "instruction": query["instruction"],
-                      "gold": match.group(1).strip() if match else query["output"].strip()})
+                      "gold": match.group(1).strip() if match else query["output"].strip(),
+                      # The other readings a question that leaves a choice open accepts, each a
+                      # gold script of its own; "gold" stays the canonical one.
+                      "accepted": [a.strip() for a in query.get("also_accepted") or []]})
     return data, items
 
 
@@ -316,6 +319,23 @@ def best(gold: dict, results: list[dict]) -> tuple[str, dict | None]:
             if g == grade:
                 return g, r
     return "mismatch", results[-1] if results else None
+
+
+def best_reading(golds: list[dict | None], results: list[dict]) -> tuple[str, dict | None, int | None]:
+    """The best grade a script earns against any reading the question accepts.
+
+    golds[0] is the canonical gold and the rest are the question's also_accepted readings;
+    a reading whose gold did not run is None. Returns the grade, the result that earned it,
+    and which reading it matched (0 for the canonical one), or None when none did.
+    """
+    fallback = ("mismatch", results[-1] if results else None, None)
+    for wanted in ("match", "extra_columns"):
+        for n, gold in enumerate(golds):
+            if gold is not None:
+                grade, result = best(gold, results)
+                if grade == wanted:
+                    return grade, result, n
+    return fallback
 
 
 # --------------------------------------------------------------------------- #
@@ -536,10 +556,14 @@ def main(argv=None) -> int:
         items.extend(suite_items)
 
     def usable(item):
-        result = gold_result(grader, item["suite"], data[item["suite"]], item["gold"],
-                             args.data == "key")
-        golds[item["id"]] = result
-        return result is not None and bool(result.get("rows"))
+        readings = [gold_result(grader, item["suite"], data[item["suite"]], program,
+                                args.data == "key") for program in [item["gold"], *item["accepted"]]]
+        for n, reading in enumerate(readings[1:], 1):
+            if reading is None:
+                print(f"{item['id']}: accepted reading {n} does not run; it is left out",
+                      file=sys.stderr)
+        golds[item["id"]] = readings
+        return readings[0] is not None and bool(readings[0].get("rows"))
 
     if args.only:
         wanted = set(args.only.split(","))
@@ -565,22 +589,24 @@ def main(argv=None) -> int:
         finally:
             with free_lock:
                 free.append(server)
-        gold = golds.get(item["id"])
+        readings = golds.get(item["id"]) or [None]
+        gold = readings[0]
         answer = None
         right_at = None
+        reading = None
         if outcome["submission"] is None:
             grade = "no_submit"
             # Did a run show the right rows, though no answer was given? Then the model
             # solved it and failed only to finish: a different problem from not solving it.
-            if gold is not None:
-                right_at = next((r["call"] for r in reversed(outcome["runs"])
-                                 if best(gold, r["results"])[0] in ("match", "extra_columns")), None)
-                if right_at is not None:
-                    grade = "right_not_submitted"
+            right_at = next((r["call"] for r in reversed(outcome["runs"])
+                             if best_reading(readings, r["results"])[0] in ("match", "extra_columns")),
+                            None)
+            if right_at is not None:
+                grade = "right_not_submitted"
         elif gold is None:
             grade = "mismatch"
         else:
-            grade, answer = best(gold, outcome["submission"]["results"])
+            grade, answer, reading = best_reading(readings, outcome["submission"]["results"])
         submitted = (outcome["submission"] or {}).get("script")
         # Over a data key the server ignores a table the script declares again, so a copy
         # can't change the rows; only an inline run's copy can.
@@ -595,10 +621,12 @@ def main(argv=None) -> int:
                       submitted=submitted, altered_tables=altered,
                       assumption="ssum" in outcome["final_text"],
                       raw_tokens="<|" in outcome["final_text"], seconds=outcome["seconds"],
+                      accepted_reading=reading,
                       gold_columns=(gold or {}).get("columns"),
                       answer_columns=(answer or {}).get("columns"))
         with open(os.path.join(out, "transcripts", item["id"].replace(":", "-") + ".json"), "w") as f:
-            json.dump({**record, "gold_result": gold, "answer_result": answer,
+            json.dump({**record, "gold_result": gold, "accepted": item["accepted"],
+                       "accepted_results": readings[1:], "answer_result": answer,
                        "final_text": outcome["final_text"], "events": outcome["events"]}, f, indent=1)
         print(f"{record['id']:<18} {grade:<14} calls={record['calls']:<3} "
               f"failed={len(record['failures']):<2} {record['seconds']}s", file=sys.stderr)
@@ -637,7 +665,9 @@ def summary(records: list[dict], args, server_info: dict) -> str:
                   f"Runs with a failed call: {sum(1 for r in records if r['failures'])}. "
                   f"Submissions that altered the data: "
                   f"{sum(1 for r in records if r['altered_tables'])}. "
-                  f"Replies with an assumption line: {sum(1 for r in records if r['assumption'])}.", "",
+                  f"Replies with an assumption line: {sum(1 for r in records if r['assumption'])}. "
+                  f"Passes on a reading other than the canonical gold: "
+                  f"{sum(1 for r in records if r.get('accepted_reading'))}.", "",
               "## By category", "", "| category | pass | of |", "|---|---|---|"]
     by_category = collections.defaultdict(list)
     for r in records:
