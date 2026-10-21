@@ -74,5 +74,5 @@ A question passes (`match`) when the rows `relix_submit` returned equal the gold
 query's rows over the same data, as a multiset. Columns are matched by their
 values, so the model's column names and order don't matter. `extra_columns`
 means the gold's rows were all there with more columns than asked for;
-`mismatch` means different rows; `data_altered` means different rows from a script whose copy of a table it reads differs from the data given (the model retyped it), kept apart from a wrong query; `no_submit` means the model never submitted.
+`mismatch` means different rows; `data_altered` means different rows from a script whose copy of a table it reads differs from the data given (the model retyped it), kept apart from a wrong query; `right_not_submitted` means the model never submitted, but one of its `relix_run` calls returned the right rows (the summary says which call), so it solved the question and failed only to finish; `no_submit` means it never submitted and no run of it was right. The summary's "right rows reached" counts `match`, `extra_columns` and `right_not_submitted`.
 Row order isn't graded.

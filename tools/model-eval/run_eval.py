@@ -324,7 +324,7 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args) -> dict:
     tools = openai_tools(server.tools)
     messages = [{"role": "system", "content": prompt},
                 {"role": "user", "content": f"Here is the data.\n\n{data}\n\n{item['instruction']}"}]
-    events, calls, failures, topics = [], 0, [], []
+    events, calls, failures, topics, runs = [], 0, [], [], []
     submission, final_text, stop = None, "", "turns"
     started = time.time()
     for _ in range(args.max_turns):
@@ -382,17 +382,22 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args) -> dict:
             if problem:
                 failures.append({"call": calls, "tool": name, "error": problem})
             structured = result.get("structuredContent") or {}
+            results = structured.get("results") or []
             if name == "relix_submit" and structured.get("submitted"):
-                results = structured.get("results") or []
                 submission = {"script": structured.get("script"),
                               "result": results[-1] if results else None}
-            events.append({"tool": name, "arguments": arguments, "result": text_of(result)})
+            finished = (name == "relix_run" and structured.get("valid") and not structured.get("stopped")
+                        and results and results[-1].get("failure") is None)
+            if finished:
+                runs.append({"call": calls, "result": results[-1]})
+            events.append({"tool": name, "arguments": arguments, "result": text_of(result),
+                           **({"rows": results[-1]} if finished else {})})
             messages.append({"role": "tool", "tool_call_id": call.get("id", ""),
                              "content": text_of(result)})
         if calls >= args.max_calls and submission is None:
             stop = "call_limit"
             break
-    return {"events": events, "calls": calls, "failures": failures, "learn": topics,
+    return {"events": events, "calls": calls, "failures": failures, "learn": topics, "runs": runs,
             "submission": submission, "final_text": final_text, "stop": stop,
             "seconds": round(time.time() - started, 1)}
 
@@ -487,8 +492,16 @@ def main(argv=None) -> int:
                 free.append(server)
         gold = golds.get(item["id"])
         answer = (outcome["submission"] or {}).get("result")
+        right_at = None
         if outcome["submission"] is None:
             grade = "no_submit"
+            # Did a run show the right rows, though no answer was given? Then the model
+            # solved it and failed only to finish: a different problem from not solving it.
+            if gold is not None:
+                right_at = next((r["call"] for r in reversed(outcome["runs"])
+                                 if compare(gold, r["result"]) in ("match", "extra_columns")), None)
+                if right_at is not None:
+                    grade = "right_not_submitted"
         elif answer is None or gold is None:
             grade = "mismatch"
         else:
@@ -500,7 +513,7 @@ def main(argv=None) -> int:
             # query is wrong: a copying failure, kept apart from a wrong answer.
             grade = "data_altered"
         record = {k: item[k] for k in ("id", "suite", "category", "instruction", "gold")}
-        record.update(grade=grade, stop=outcome["stop"], calls=outcome["calls"],
+        record.update(grade=grade, right_at_call=right_at, stop=outcome["stop"], calls=outcome["calls"],
                       failures=outcome["failures"], learn=outcome["learn"],
                       submitted=submitted, altered_tables=altered,
                       assumption="ssum" in outcome["final_text"],
@@ -538,7 +551,9 @@ def summary(records: list[dict], args, server_info: dict) -> str:
              "| grade | count |", "|---|---|"]
     lines += [f"| {g} | {n} |" for g, n in grades.most_common()]
     passed = grades["match"]
+    reached = grades["match"] + grades["extra_columns"] + grades["right_not_submitted"]
     lines += ["", f"Pass rate: {passed}/{total} ({100 * passed / max(total, 1):.0f}%). "
+                  f"Right rows reached, submitted or not: {reached}/{total}. "
                   f"Mean calls: {sum(r['calls'] for r in records) / max(total, 1):.1f}. "
                   f"Runs with a failed call: {sum(1 for r in records if r['failures'])}. "
                   f"Submissions that altered the data: "
@@ -566,6 +581,8 @@ def summary(records: list[dict], args, server_info: dict) -> str:
                              if l.strip() and not l.lstrip().startswith("|") and l.strip() != "];"
                              and ":= [" not in l)
             lines += ["Submitted (data declarations left out):", "```relix", body, "```"]
+        if r.get("right_at_call"):
+            lines.append(f"The right rows came back at call {r['right_at_call']}, but were never submitted.")
         lines += [f"Columns: gold {r['gold_columns']}, answer {r['answer_columns']}"]
         if r["altered_tables"]:
             lines.append(f"Data altered in the submission: {', '.join(r['altered_tables'])}")
