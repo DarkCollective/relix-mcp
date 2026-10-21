@@ -30,6 +30,9 @@ final class OfflineSession {
     private OfflineSession() {
     }
 
+    /** Read once, when the server starts: a malformed {@link SessionClock#VARIABLE} fails there. */
+    private static final java.time.Clock CLOCK = SessionClock.fromEnvironment();
+
     /**
      * Opens a session over what the caller sent.
      *
@@ -42,6 +45,7 @@ final class OfflineSession {
                 .catalog(catalog)
                 .remoteFiles(false)
                 .scriptLoader(imports)
+                .clock(CLOCK)
                 .build();
     }
 }

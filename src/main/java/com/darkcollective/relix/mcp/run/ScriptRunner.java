@@ -8,7 +8,9 @@ import com.darkcollective.relix.embed.Rows;
 import com.darkcollective.relix.embed.Sandbox;
 import com.darkcollective.relix.mcp.offline.Finding;
 import com.darkcollective.relix.mcp.offline.QueryNames;
+import com.darkcollective.relix.mcp.offline.SessionClock;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -44,6 +46,7 @@ public final class ScriptRunner {
     public static final Sandbox DEFAULT_SANDBOX = sandbox(DEFAULT_QUERY_TIMEOUT);
 
     private final Sandbox sandbox;
+    private final Clock clock;
 
     /**
      * The server's limits, with {@code queryTimeout} as the time one query may run.
@@ -73,12 +76,24 @@ public final class ScriptRunner {
     }
 
     /**
-     * A runner with the given sandbox.
+     * A runner with the given sandbox, whose {@code NOW()} reads the clock the server's
+     * environment names ({@link SessionClock}).
      *
      * @param sandbox a closed sandbox; its declarations are what scripts may reach
      */
     public ScriptRunner(Sandbox sandbox) {
+        this(sandbox, SessionClock.fromEnvironment());
+    }
+
+    /**
+     * A runner with the given sandbox and clock.
+     *
+     * @param sandbox a closed sandbox; its declarations are what scripts may reach
+     * @param clock   what a script's {@code NOW()} reads
+     */
+    public ScriptRunner(Sandbox sandbox, Clock clock) {
         this.sandbox = Objects.requireNonNull(sandbox, "sandbox");
+        this.clock = Objects.requireNonNull(clock, "clock");
         if (sandbox.isOpen()) {
             throw new IllegalArgumentException("a runner needs a closed sandbox");
         }
@@ -120,7 +135,7 @@ public final class ScriptRunner {
         Objects.requireNonNull(stopped, "stopped");
         List<Finding> findings = new ArrayList<>();
         List<QueryResult> results = new ArrayList<>();
-        try (Relix relix = Relix.builder().sandbox(sandbox).build()) {
+        try (Relix relix = Relix.builder().sandbox(sandbox).clock(clock).build()) {
             // Validation first: the sandbox's refusals are diagnostics there, with the rest
             // of what is wrong, where running would stop at the first.
             for (Diagnostic diagnostic : relix.validate(script)) {
