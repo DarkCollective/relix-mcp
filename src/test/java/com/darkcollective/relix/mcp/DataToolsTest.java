@@ -151,6 +151,21 @@ class DataToolsTest {
     }
 
     @Test
+    void aReadOnlyKeyRefusesALoadThroughTheTool() {
+        CallToolResult loaded = tools.load(call("relix_load", Map.of("tables", ORDERS, "read_only", true)));
+        String key = (String) ((Map<?, ?>) loaded.structuredContent()).get("key");
+        assertThat(((Map<?, ?>) loaded.structuredContent()).get("readOnly")).isEqualTo(true);
+
+        CallToolResult refused = tools.load(call("relix_load", Map.of("key", key,
+                "tables", "Orders := [\n| x |\n|---|\n| 1 |\n];")));
+
+        assertThat(refused.isError()).isTrue();
+        assertThat(text(refused)).contains("read-only");
+        assertThat(text(tools.run(call("relix_run", Map.of("data", key,
+                "script", "query { GROUP COUNT(*) -> n (Orders) };"))))).contains("| 3 |");
+    }
+
+    @Test
     void aKeyIsGoneOnceUnloaded() {
         String key = load(ORDERS);
 

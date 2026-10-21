@@ -110,7 +110,8 @@ class McpServer:
         with self._lock:
             held = self.keys.get(suite)
         if held is None:
-            result = self.call("relix_load", {"tables": data})
+            # Read-only: no call, the model's included, can replace a suite table under it.
+            result = self.call("relix_load", {"tables": data, "read_only": True})
             structured = result.get("structuredContent") or {}
             if result.get("isError") or not structured.get("key"):
                 raise RuntimeError(f"relix_load refused {suite}'s data: {text_of(result)[:500]}")

@@ -11,11 +11,13 @@ validate again.
 
 | Tool | What it does |
 |---|---|
-| `relix_validate(script, files?, catalog?)` | Checks syntax, every relation and column name, types, and each operator's rules. Nothing the script names is opened: not its files, not its databases, not its HTTP endpoints. |
-| `relix_explain(script, files?, catalog?)` | Shows how the engine would run a script: each rewrite the optimiser applies, the rewritten query, and the physical plan. For a database connection, that includes the exact SQL that would be sent, in the connection's dialect. Like `relix_validate`, it contacts nothing. |
-| `relix_run(script)` | Runs a script whose data is its own (inline tables, views, generators) and returns each query's rows. A model can show real results instead of predicted ones. Each column heading carries its type (`ts STRING`), and each result says whether its order is guaranteed (`sorted by spend DESC`, or `in no guaranteed order`), from the order the physical plan delivers. It validates first, so it needs no `relix_validate` call before it. Files, databases, HTTP sources, connections and imports are refused. `query { relix.columns };` shows the columns and types the engine gave the script's own tables. |
-| `relix_submit(script)` | The model's final answer: runs the script as `relix_run` does and returns the script and its rows together, in a fixed form the model is told to show unchanged. The rows shown are then the engine's, for exactly that script, and a client or an eval can read the answer from the tool call (`structuredContent` has `submitted`, `script` and `results`) whatever the model writes afterwards. |
+| `relix_validate(script, files?, catalog?, data?)` | Checks syntax, every relation and column name, types, and each operator's rules. Nothing the script names is opened: not its files, not its databases, not its HTTP endpoints. |
+| `relix_explain(script, files?, catalog?, data?)` | Shows how the engine would run a script: each rewrite the optimiser applies, the rewritten query, and the physical plan. For a database connection, that includes the exact SQL that would be sent, in the connection's dialect. Like `relix_validate`, it contacts nothing. |
+| `relix_run(script, data?)` | Runs a script whose data is its own (inline tables, views, generators) and returns each query's rows. A model can show real results instead of predicted ones. Each column heading carries its type (`ts STRING`), and each result says whether its order is guaranteed (`sorted by spend DESC`, or `in no guaranteed order`), from the order the physical plan delivers. It validates first, so it needs no `relix_validate` call before it. Files, databases, HTTP sources, connections and imports are refused. `query { relix.columns };` shows the columns and types the engine gave the script's own tables. |
+| `relix_submit(script, data?)` | The model's final answer: runs the script as `relix_run` does and returns the script and its rows together, in a fixed form the model is told to show unchanged. The rows shown are then the engine's, for exactly that script, and a client or an eval can read the answer from the tool call (`structuredContent` has `submitted`, `script` and `results`) whatever the model writes afterwards. |
 | `relix_learn(topic?, detail?)` | The language reference that ships inside the engine: the page for an operator (`σ`, `select`), a statement, or a function (`Round`). With no topic, a list of every page. The whole grammar, as EBNF, is `relix_learn("language/grammar.md")`. With `detail: "brief"`, a page is cut to its syntax and one example, so a conversation does not carry whole pages on every later turn. |
+| `relix_load(tables?, key?, read_only?)` | Loads inline tables once and returns a data key, with each table's columns, types and row count. Pass the key as `data` to the four script tools, and their scripts hold only the query. See [Loaded data](#loaded-data). |
+| `relix_unload(key)` | Releases a data key before it expires. |
 
 ### What `relix_validate` and `relix_explain` need from the caller
 
@@ -48,6 +50,31 @@ data it writes out and can reach nothing else. The sandbox's limits bound each c
 most 200 rows per query (a longer result is cut, and says so), 10 seconds per query, and
 caps on buffered rows, recursion rounds and rows passed between operators. On Lambda the
 per-query time is configurable, and a deadline bounds the whole call (below).
+
+### Loaded data
+
+`relix_load` takes inline-table declarations, and nothing else, and holds them under a
+random 128-bit data key, so a model (or the client in front of it) states its data once
+instead of retyping it into every call. A script given `data` reads those tables without
+declaring them:
+
+- The tables go into the session as parsed statements, never pasted in front of the
+  script, so a finding in the script is on the script's own line.
+- A declaration in the script of a loaded table is ignored, with a warning: it is most
+  likely a copy, and perhaps a wrong one.
+- The data's warnings are listed in full only by `relix_load`. Later results carry one
+  line counting them, in their own field, `dataWarnings`.
+- With `key`, `relix_load` adds tables to that key, replacing any of the same name. With
+  `key` alone it describes what the key holds. A key loaded with `read_only` can never be
+  replaced or added to, by any caller holding it; a client that loads data for a model
+  to read should load it that way.
+
+A key lasts an hour from its last use, holds at most 400,000 bytes, and is found only by
+the caller that loaded it: over stdio or loopback HTTP that is this machine; on Lambda,
+the API key the request carried (stored as its SHA-256, never the key). A caller may hold
+20 keys at once, or what `RELIX_MCP_MAX_DATA_KEYS` says; at the limit a load is refused
+rather than evicting a key another conversation may be using. A server bound to any other
+address cannot tell its callers apart, and offers no `relix_load`.
 
 ## Running it
 
@@ -136,6 +163,23 @@ the Parameters and Secrets extension, from whichever of these the environment na
 With neither, the function does not start; it never serves without a key. Give it a
 reserved-concurrency cap too: the key limits who can call it, and the cap limits what a
 leaked key can cost.
+
+**Loaded data.** `relix_load` needs a store every instance shares, so on Lambda it is
+offered only when `RELIX_MCP_DATA_TABLE` names a DynamoDB table in the function's region,
+shaped as follows:
+
+| Attribute | Type | Role |
+|---|---|---|
+| `owner_id` | string | partition key: the SHA-256 of the API key that loaded the data |
+| `data_key` | string | sort key: the data key |
+| `expires_at` | number | epoch seconds; the table's TTL attribute |
+
+The function's role needs `dynamodb:GetItem`, `PutItem`, `UpdateItem`, `DeleteItem` and
+`Query` on the table, and nothing else. DynamoDB deletes an expired item late, so the
+server compares `expires_at` with the clock on every read and count; the TTL is
+housekeeping. The requests are signed by the server itself (`SigV4`), so the jar carries
+no AWS SDK. `./gradlew test -PdynamodbLocal=http://localhost:8000` also runs the store's
+tests against DynamoDB Local.
 
 A client connects with the key as a header:
 

@@ -118,6 +118,11 @@ test {
         excludeTags 'fat-jar'
     }
     systemProperty 'relix.mcp.version', project.version.toString()
+    // DynamoDbDataStoreTest runs against DynamoDB Local when given its endpoint:
+    // ./gradlew test -PdynamodbLocal=http://localhost:8000
+    if (findProperty('dynamodbLocal')) {
+        systemProperty 'relix.mcp.dynamodbLocal', findProperty('dynamodbLocal')
+    }
 }
 
 // `relix-mcp-<version>-all.jar`: everything on the runtime class path in one jar, run with

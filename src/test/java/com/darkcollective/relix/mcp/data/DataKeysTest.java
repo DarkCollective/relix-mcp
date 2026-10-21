@@ -102,6 +102,35 @@ class DataKeysTest {
     }
 
     @Test
+    void aReadOnlyKeysTablesCannotBeReplacedOrAddedTo() {
+        LoadReport loaded = keys.load("alice", null, ORDERS, true);
+        String key = loaded.key();
+        assertThat(loaded.readOnly()).isTrue();
+        assertThat(loaded.render()).contains(key + ", read-only");
+
+        LoadReport replace = keys.load("alice", key, "Orders := [\n| x |\n|---|\n| 1 |\n];");
+        LoadReport add = keys.load("alice", key, WORDS, false);
+
+        assertThat(replace.loaded()).isFalse();
+        assertThat(replace.refusal()).contains("read-only");
+        assertThat(add.loaded()).isFalse();
+        assertThat(keys.find("alice", key).orElseThrow().declarations()).isEqualTo(ORDERS);
+        LoadReport described = keys.load("alice", key, null);
+        assertThat(described.readOnly()).as("a key that is read-only stays so").isTrue();
+        assertThat(described.tables()).extracting(LoadReport.Table::rows).containsExactly(2);
+        assertThat(keys.unload("alice", key)).as("its owner can still release it").isTrue();
+    }
+
+    @Test
+    void aKeyCanBeMadeReadOnlyOnceItHoldsItsTables() {
+        String key = keys.load("alice", null, ORDERS).key();
+
+        assertThat(keys.load("alice", key, WORDS, true).readOnly()).isTrue();
+
+        assertThat(keys.load("alice", key, ORDERS).loaded()).isFalse();
+    }
+
+    @Test
     void anotherOwnersKeyIsNotFound() {
         String key = keys.load("alice", null, ORDERS).key();
 
