@@ -433,6 +433,13 @@ DROPPED_CALL = ("Your last tool call was not made: its arguments were not valid 
                 "of an unescaped quote or line break inside the script. Make the call again.")
 DROPPED_RETRIES = 2
 
+# What a model that stopped without submitting is told, --reminders times at most: the rows it
+# writes in its reply are not an answer. Its answer is then graded as any other, and marked
+# submitted_after_reminder, so the summary can give the pass rate with and without it.
+NOT_SUBMITTED = ("You have not called relix_submit, so there is no answer yet: a script or rows "
+                 "written in your reply do not count. If you have the script, call relix_submit with "
+                 "it now. If the question cannot be answered as written, call ask_user.")
+
 _LEAKED = re.compile(r"(?:to=functions\.|\b)(relix_\w+|ask_user)\b[^{]*?(\{.*\})", re.DOTALL)
 
 
@@ -469,7 +476,7 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args) -> dict:
     messages = [{"role": "system", "content": prompt},
                 {"role": "user", "content": f"{given}\n\n{item['instruction']}"}]
     events, calls, failures, topics, runs = [], 0, [], [], []
-    asks, recovered, retries = [], 0, 0
+    asks, recovered, retries, reminders = [], 0, 0, 0
     submission, final_text, stop = None, "", "turns"
     started = time.time()
     for _ in range(args.max_turns):
@@ -514,6 +521,11 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args) -> dict:
                     continue
                 stop = "dropped_tool_call"  # LM Studio omits a call whose arguments don't parse
             else:
+                if reminders < args.reminders:
+                    reminders += 1
+                    messages.append({"role": "user", "content": NOT_SUBMITTED})
+                    events.append({"harness": NOT_SUBMITTED})
+                    continue
                 stop = "stopped_without_submit"
             break
         if submission is not None:
@@ -564,7 +576,7 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args) -> dict:
             stop = "call_limit"
             break
     return {"events": events, "calls": calls, "failures": failures, "learn": topics, "runs": runs,
-            "asks": asks, "recovered": recovered, "retries": retries,
+            "asks": asks, "recovered": recovered, "retries": retries, "reminders": reminders,
             "submission": submission, "final_text": final_text, "stop": stop,
             "seconds": round(time.time() - started, 1)}
 
@@ -588,9 +600,12 @@ def main(argv=None) -> int:
                         help="'key' (the default) loads each suite once with relix_load and gives the "
                              "model its key and columns; 'inline' puts the declarations in the question "
                              "for the model to copy into every script")
-    parser.add_argument("--tool-choice", choices=("required", "auto"), default="required",
-                        help="'required' (the default): every turn before relix_submit must be a tool "
-                             "call, so the model cannot end by writing its answer as text; 'auto' as before")
+    parser.add_argument("--tool-choice", choices=("auto", "required"), default="auto",
+                        help="sent as tool_choice before relix_submit; LM Studio ignored 'required' for "
+                             "gpt-oss-20b (it still answered in text), so 'auto' is the default")
+    parser.add_argument("--reminders", type=int, default=1,
+                        help="how many times a model that stops without submitting is told to submit "
+                             "(default 1; 0 grades its first stop, as before)")
     parser.add_argument("--on-ask", choices=("continue", "stop"), default="continue",
                         help="when the model calls ask_user: 'continue' (the default) tells it no one can "
                              "answer and to choose a reading; 'stop' ends the question, graded 'asked'")
@@ -711,6 +726,7 @@ def main(argv=None) -> int:
                       raw_tokens="<|" in outcome["final_text"], seconds=outcome["seconds"],
                       accepted_reading=reading, asks=outcome["asks"],
                       recovered_calls=outcome["recovered"], dropped_call_retries=outcome["retries"],
+                      submitted_after_reminder=bool(outcome["reminders"] and outcome["submission"]),
                       gold_columns=(gold or {}).get("columns"),
                       answer_columns=(answer or {}).get("columns"))
         with open(os.path.join(out, "transcripts", item["id"].replace(":", "-") + ".json"), "w") as f:
@@ -747,8 +763,12 @@ def summary(records: list[dict], args, server_info: dict) -> str:
              "| grade | count |", "|---|---|"]
     lines += [f"| {g} | {n} |" for g, n in grades.most_common()]
     passed = grades["match"]
+    first_try = sum(1 for r in records if r["grade"] == "match" and not r.get("submitted_after_reminder")
+                    and not r.get("recovered_calls"))
     reached = grades["match"] + grades["extra_columns"] + grades["right_not_submitted"]
-    lines += ["", f"Pass rate: {passed}/{total} ({100 * passed / max(total, 1):.0f}%). "
+    lines += ["", f"Pass rate: {passed}/{total} ({100 * passed / max(total, 1):.0f}%); "
+                  f"without a reminder or a recovered call: {first_try}/{total} "
+                  f"({100 * first_try / max(total, 1):.0f}%). "
                   f"Right rows reached, submitted or not: {reached}/{total}. "
                   f"Mean calls: {sum(r['calls'] for r in records) / max(total, 1):.1f}. "
                   f"Runs with a failed call: {sum(1 for r in records if r['failures'])}. "
@@ -760,6 +780,8 @@ def summary(records: list[dict], args, server_info: dict) -> str:
                   f"Calls recovered from the reply's text: "
                   f"{sum(r.get('recovered_calls', 0) for r in records)}. "
                   f"Dropped calls retried: {sum(r.get('dropped_call_retries', 0) for r in records)}. "
+                  f"Submitted after a reminder: "
+                  f"{sum(1 for r in records if r.get('submitted_after_reminder'))}. "
                   f"Questions where the model asked the user: "
                   f"{sum(1 for r in records if r.get('asks'))}.", "",
               "## By category", "", "| category | pass | of |", "|---|---|---|"]

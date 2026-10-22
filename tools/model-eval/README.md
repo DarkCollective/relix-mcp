@@ -78,9 +78,11 @@ Each run writes `runs/<timestamp>/`:
 
 ## Finishing, and asking
 
-A question ends with `relix_submit`. With `--tool-choice required` (the default) every
-turn before it must be a tool call, so the model cannot end by writing its answer as
-text; one turn after it, with no calls, is for the closing reply. The harness also:
+A question ends with `relix_submit`. A model that stops without it, writing its answer
+as text, is told once (`--reminders`, default 1) that only `relix_submit` answers, and
+graded on what it submits then; the summary gives the pass rate with and without those.
+`--tool-choice required` asks the API to allow only tool calls before it, but LM Studio
+ignored it for gpt-oss-20b, so `auto` is the default. The harness also:
 
 - makes a call the model wrote into its reply instead of making it, gpt-oss's own
   `to=functions.relix_submit … {…}` or `relix_submit {…}`, which LM Studio passes through
