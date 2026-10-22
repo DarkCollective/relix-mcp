@@ -107,6 +107,12 @@ separator) lists the gold of each other reading it accepts in `also_accepted`, a
 matching any of them passes. `results.jsonl` records which in `accepted_reading` (0 for
 the canonical gold), and the summary counts the passes on another reading.
 
+The grading server is started with `RELIX_MCP_MAX_OUTPUT_ROWS` far above the model's
+200-row cap, so the golds are whole; a submission or run whose result was cut at the cap is
+run again there and graded on its whole rows (`regraded_whole` in `results.jsonl`). The
+summary leads with "right rows submitted, in any columns" (`match`, `extra_columns`,
+`missing_columns`), the nearest to relix's agentic grade, beside the exact pass rate.
+
 Columns are matched by their
 values, so the model's column names and order don't matter. `extra_columns`
 means the gold's rows were all there with more columns than asked for;

@@ -68,8 +68,9 @@ _EXPRESSION = re.compile(r"RELIX EXPRESSION:\s*(.*?)\s*(?:EXPECTED OUTPUT:|\Z)",
 class McpServer:
     """One relix-mcp process, spoken to with newline-delimited JSON-RPC."""
 
-    def __init__(self, launcher: str, now: str | None = None):
-        env = {**os.environ, **({"RELIX_MCP_NOW": now} if now else {})}
+    def __init__(self, launcher: str, now: str | None = None, max_rows: int | None = None):
+        env = {**os.environ, **({"RELIX_MCP_NOW": now} if now else {}),
+               **({"RELIX_MCP_MAX_OUTPUT_ROWS": str(max_rows)} if max_rows else {})}
         self._proc = subprocess.Popen([launcher], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                       stderr=subprocess.DEVNULL, text=True, bufsize=1, env=env)
         self._next = 0
@@ -311,6 +312,28 @@ def compare(gold: dict, answer: dict) -> str:
     if not search(0, []):
         return "mismatch"
     return "match" if len(answer_cols) == len(gold_cols) else "extra_columns"
+
+
+GRADING_ROWS = 100_000
+
+# The grades whose rows are the gold's, whichever columns carry them.
+RIGHT_ROWS = ("match", "extra_columns", "missing_columns")
+
+
+def whole_results(grader: "McpServer", item: dict, data: dict, script: str | None,
+                  results: list[dict], args) -> list[dict]:
+    """A script's results whole: as given when none was cut at the row cap, otherwise
+    those of the same script run again on the grading server, whose cap is far higher."""
+    if not script or not any(r.get("truncated") for r in results):
+        return results
+    if args.data == "key":
+        run = grader.call("relix_run", {"script": script,
+                                        "data": grader.load(item["suite"], data[item["suite"]])[0]})
+    else:
+        run = grader.call("relix_run", {"script": script})
+    rerun = [r for r in (run.get("structuredContent") or {}).get("results") or []
+             if r.get("failure") is None]
+    return rerun or results
 
 
 def best(gold: dict, results: list[dict]) -> tuple[str, dict | None]:
@@ -564,7 +587,7 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args) -> dict:
             finished = (name == "relix_run" and structured.get("valid") and not structured.get("stopped")
                         and results and results[-1].get("failure") is None)
             if finished:
-                runs.append({"call": calls, "results": ran})
+                runs.append({"call": calls, "results": ran, "script": arguments.get("script")})
             events.append({"tool": name, "arguments": arguments, "result": text_of(result),
                            **({"rows": results[-1]} if finished else {})})
             messages.append({"role": "tool", "tool_call_id": call.get("id", ""),
@@ -648,7 +671,9 @@ def main(argv=None) -> int:
         args.suites_dir = stage(args.suites_dir, args.suite, now, out)
     args.pinned_now = now
 
-    grader = McpServer(args.launcher, now)
+    # The grading server returns results whole: the model's are cut at the server's 200-row
+    # cap, and two cuts of the same rows may differ, so a cut result is run again here.
+    grader = McpServer(args.launcher, now, max_rows=GRADING_ROWS)
     data, items, golds = {}, [], {}
     for name in args.suite:
         data[name], suite_items = load_suite(args.suites_dir, name)
@@ -695,6 +720,16 @@ def main(argv=None) -> int:
         answer = None
         right_at = None
         reading = None
+        regraded = 0
+        if outcome["submission"] is not None:
+            whole = whole_results(grader, item, data, outcome["submission"]["script"],
+                                  outcome["submission"]["results"], args)
+            regraded += whole is not outcome["submission"]["results"]
+            outcome["submission"]["results"] = whole
+        for r in outcome["runs"]:
+            whole = whole_results(grader, item, data, r.get("script"), r["results"], args)
+            regraded += whole is not r["results"]
+            r["results"] = whole
         if outcome["submission"] is None and outcome["stop"] == "asked":
             grade = "asked"
         elif outcome["submission"] is None:
@@ -724,7 +759,7 @@ def main(argv=None) -> int:
                       submitted=submitted, altered_tables=altered,
                       assumption="ssum" in outcome["final_text"],
                       raw_tokens="<|" in outcome["final_text"], seconds=outcome["seconds"],
-                      accepted_reading=reading, asks=outcome["asks"],
+                      accepted_reading=reading, asks=outcome["asks"], regraded_whole=regraded,
                       recovered_calls=outcome["recovered"], dropped_call_retries=outcome["retries"],
                       submitted_after_reminder=bool(outcome["reminders"] and outcome["submission"]),
                       gold_columns=(gold or {}).get("columns"),
@@ -766,6 +801,9 @@ def summary(records: list[dict], args, server_info: dict) -> str:
     first_try = sum(1 for r in records if r["grade"] == "match" and not r.get("submitted_after_reminder")
                     and not r.get("recovered_calls"))
     reached = grades["match"] + grades["extra_columns"] + grades["right_not_submitted"]
+    right_rows = sum(1 for r in records if r["grade"] in RIGHT_ROWS)
+    lines += ["", f"Right rows submitted, in any columns: {right_rows}/{total} "
+                  f"({100 * right_rows / max(total, 1):.0f}%)."]
     lines += ["", f"Pass rate: {passed}/{total} ({100 * passed / max(total, 1):.0f}%); "
                   f"without a reminder or a recovered call: {first_try}/{total} "
                   f"({100 * first_try / max(total, 1):.0f}%). "
@@ -784,13 +822,17 @@ def summary(records: list[dict], args, server_info: dict) -> str:
                   f"{sum(1 for r in records if r.get('submitted_after_reminder'))}. "
                   f"Questions where the model asked the user: "
                   f"{sum(1 for r in records if r.get('asks'))}.", "",
-              "## By category", "", "| category | pass | of |", "|---|---|---|"]
+              "## By category", "",
+              "Right rows: the gold's rows in any columns (match, extra_columns or missing_columns), "
+              "the nearest to relix's agentic grade, which also tolerates extra columns.", "",
+              "| category | pass | right rows | of |", "|---|---|---|---|"]
     by_category = collections.defaultdict(list)
     for r in records:
         by_category[r["category"]].append(r)
     for category in sorted(by_category):
         rs = by_category[category]
-        lines.append(f"| {category} | {sum(r['grade'] == 'match' for r in rs)} | {len(rs)} |")
+        right = sum(r["grade"] in RIGHT_ROWS for r in rs)
+        lines.append(f"| {category} | {sum(r['grade'] == 'match' for r in rs)} | {right} | {len(rs)} |")
     asked = [r for r in records if r.get("asks")]
     if asked:
         lines += ["", "## Questions the model asked about", "",
