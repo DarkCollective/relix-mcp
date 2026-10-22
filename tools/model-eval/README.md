@@ -76,6 +76,24 @@ Each run writes `runs/<timestamp>/`:
 - `results.jsonl`: one record per question;
 - `transcripts/`: every message, tool call and result.
 
+## Finishing, and asking
+
+A question ends with `relix_submit`. With `--tool-choice required` (the default) every
+turn before it must be a tool call, so the model cannot end by writing its answer as
+text; one turn after it, with no calls, is for the closing reply. The harness also:
+
+- makes a call the model wrote into its reply instead of making it, gpt-oss's own
+  `to=functions.relix_submit … {…}` or `relix_submit {…}`, which LM Studio passes through
+  as text, and counts it as recovered;
+- tells the model when LM Studio dropped its call because the arguments were not valid
+  JSON, up to twice, so it can make the call again.
+
+The model may call `ask_user`, a tool the harness answers itself, when a question cannot be
+answered as written. No user is there, so by default (`--on-ask continue`) it is told to
+choose a reading, say which, and submit; with `--on-ask stop` asking ends the question,
+graded `asked`. Each question asked is in `results.jsonl` and listed in the summary, to
+judge whether asking was right.
+
 ## Grading
 
 A question passes (`match`) when the rows of one of the queries `relix_submit` ran
@@ -90,5 +108,7 @@ the canonical gold), and the summary counts the passes on another reading.
 Columns are matched by their
 values, so the model's column names and order don't matter. `extra_columns`
 means the gold's rows were all there with more columns than asked for;
-`mismatch` means different rows; `data_altered` means different rows from a script whose copy of a table it reads differs from the data given (the model retyped it), kept apart from a wrong query; it arises only with `--data inline`, since over a data key the server ignores a table the script declares again; `right_not_submitted` means the model never submitted, but one of its `relix_run` calls returned the right rows (the summary says which call), so it solved the question and failed only to finish; `no_submit` means it never submitted and no run of it was right. The summary's "right rows reached" counts `match`, `extra_columns` and `right_not_submitted`.
+`missing_columns` means the gold's rows with only some of its columns, the counterpart of
+`extra_columns`: a reading of which columns to show, not wrong rows; `mismatch` means
+different rows; numbers are compared to 9 significant digits; `data_altered` means different rows from a script whose copy of a table it reads differs from the data given (the model retyped it), kept apart from a wrong query; it arises only with `--data inline`, since over a data key the server ignores a table the script declares again; `right_not_submitted` means the model never submitted, but one of its `relix_run` calls returned the right rows (the summary says which call), so it solved the question and failed only to finish; `no_submit` means it never submitted and no run of it was right. The summary's "right rows reached" counts `match`, `extra_columns` and `right_not_submitted`.
 Row order isn't graded.
