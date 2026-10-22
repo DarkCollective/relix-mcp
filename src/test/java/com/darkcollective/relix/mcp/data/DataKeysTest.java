@@ -41,9 +41,40 @@ class DataKeysTest {
         assertThat(report.tables()).containsExactly(
                 new LoadReport.Table("Orders", 2, List.of("order_id", "customer_id", "amount"),
                         List.of("NUMBER", "NUMBER", "NUMBER")),
-                new LoadReport.Table("Words", 2, List.of("w"), List.of("STRING")));
+                new LoadReport.Table("Words", 2, List.of("w"), List.of("STRING"),
+                        Map.of("w", List.of("\"b\"", "a"))));
         assertThat(report.render()).contains(report.key())
                 .contains("Orders, 2 rows: order_id NUMBER, customer_id NUMBER, amount NUMBER");
+    }
+
+    /**
+     * A model that sees only the columns cannot know that a status may be 'pairing', and so
+     * drops the word from a question; a column of a few short values lists them.
+     */
+    @Test
+    void aTextColumnWithAFewShortValuesListsThem() {
+        StringBuilder many = new StringBuilder("Devices := [\n| id | status | serial |\n|---|---|---|\n");
+        String[] statuses = {"online", "offline", "error", "pairing"};
+        for (int i = 0; i < 12; i++) {
+            many.append("| ").append(i).append(" | ").append(statuses[i % 4]).append(" | S-")
+                    .append(i).append(" |\n");
+        }
+        many.append("];\n");
+
+        LoadReport report = keys.load("alice", null, many.toString());
+
+        assertThat(report.tables().getFirst().values())
+                .containsExactly(Map.entry("status", List.of("error", "offline", "online", "pairing")));
+        assertThat(report.render()).contains("status is one of: error, offline, online, pairing")
+                .doesNotContain("serial is one of");
+    }
+
+    @Test
+    void aTextColumnOfLongValuesIsNotListed() {
+        LoadReport report = keys.load("alice", null, "Notes := [\n| id | body |\n|---|---|\n| 1 | "
+                + "x".repeat(DataKeys.MAX_LISTED_LENGTH + 1) + " |\n];\n");
+
+        assertThat(report.tables().getFirst().values()).isEmpty();
     }
 
     @Test

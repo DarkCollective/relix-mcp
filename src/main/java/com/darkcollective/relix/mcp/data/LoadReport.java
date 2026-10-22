@@ -2,7 +2,10 @@ package com.darkcollective.relix.mcp.data;
 
 import com.darkcollective.relix.mcp.offline.Finding;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
@@ -28,13 +31,32 @@ public record LoadReport(String key, List<Table> tables, List<String> replaced,
      * @param rows    how many rows it has
      * @param columns its columns' names
      * @param types   each column's type, as a script spells it
+     * @param values  for each text column with only a few distinct values, those values,
+     *                sorted: what a script filtering it can compare with, which a reader
+     *                that sees only the columns cannot know
      */
-    public record Table(String name, int rows, List<String> columns, List<String> types) {
+    public record Table(String name, int rows, List<String> columns, List<String> types,
+                        Map<String, List<String>> values) {
 
         /** Copies the lists. */
         public Table {
             columns = List.copyOf(columns);
             types = List.copyOf(types);
+            Map<String, List<String>> copied = new LinkedHashMap<>();
+            values.forEach((column, listed) -> copied.put(column, List.copyOf(listed)));
+            values = Collections.unmodifiableMap(copied);
+        }
+
+        /**
+         * A table with no values listed.
+         *
+         * @param name    its name
+         * @param rows    how many rows it has
+         * @param columns its columns' names
+         * @param types   each column's type
+         */
+        public Table(String name, int rows, List<String> columns, List<String> types) {
+            this(name, rows, columns, types, Map.of());
         }
     }
 
@@ -92,6 +114,8 @@ public record LoadReport(String key, List<Table> tables, List<String> replaced,
                 out.append(i == 0 ? "" : ", ").append(table.columns().get(i)).append(' ')
                         .append(table.types().get(i));
             }
+            table.values().forEach((column, listed) -> out.append("\n  ").append(column)
+                    .append(" is one of: ").append(String.join(", ", listed)));
         }
         if (!replaced.isEmpty()) {
             out.append("\n\nReplaced what the key held as ").append(String.join(", ", replaced))

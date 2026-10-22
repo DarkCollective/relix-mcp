@@ -937,6 +937,7 @@ final class Tools {
         data.put("rows", table.rows());
         data.put("columns", table.columns());
         data.put("types", table.types());
+        data.put("values", table.values());
         return data;
     }
 

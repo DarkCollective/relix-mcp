@@ -5,11 +5,13 @@ import com.darkcollective.relix.embed.Relix;
 import com.darkcollective.relix.embed.RelixException;
 import com.darkcollective.relix.embed.Rows;
 import com.darkcollective.relix.embed.Sandbox;
+import com.darkcollective.relix.embed.Tuple;
 import com.darkcollective.relix.lang.ast.Script;
 import com.darkcollective.relix.lang.ast.ScriptParseException;
 import com.darkcollective.relix.mcp.offline.Finding;
 import com.darkcollective.relix.mcp.run.QueryResult;
 import com.darkcollective.relix.symbol.ColumnDefinition;
+import com.darkcollective.relix.symbol.ScalarType;
 
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
@@ -218,10 +220,16 @@ public final class DataKeys {
             data.define(relix);
             for (String name : data.names()) {
                 Rows none = relix.relation(name).limit(0).run();
+                Map<String, List<String>> values = new LinkedHashMap<>();
+                for (ColumnDefinition column : none.schema().columns()) {
+                    if (column.type() == ScalarType.STRING) {
+                        listed(relix, name, column.name()).ifPresent(v -> values.put(column.name(), v));
+                    }
+                }
                 described.add(new LoadReport.Table(name, data.rows(name),
                         none.schema().columns().stream().map(ColumnDefinition::name).toList(),
                         none.schema().columns().stream()
-                                .map(c -> QueryResult.spelling(c.type())).toList()));
+                                .map(c -> QueryResult.spelling(c.type())).toList(), values));
             }
         } catch (RelixException e) {
             return LoadReport.invalid(List.of(new Finding(Finding.ERROR, e.getMessage(),
@@ -238,6 +246,37 @@ public final class DataKeys {
         String under = key != null ? key : newKey();
         store.put(owner, under, new StoredData(text, findings.size(), warned, readOnly));
         return new LoadReport(under, described, replaced, findings, null, text, readOnly);
+    }
+
+    /** The most distinct values a text column may have and still have them listed. */
+    static final int MAX_LISTED_VALUES = 10;
+
+    /** The longest value a listed column may hold: past it, a column is text, not a category. */
+    static final int MAX_LISTED_LENGTH = 40;
+
+    /**
+     * The distinct values of a text column, sorted, when there are only a few and each is
+     * short: a status, a type or a role, whose spelling a filter must match exactly.
+     */
+    private static Optional<List<String>> listed(Relix relix, String table, String column) {
+        Rows rows = relix.relation(table).project(column).distinct()
+                .limit(MAX_LISTED_VALUES + 1).run();
+        if (rows.size() > MAX_LISTED_VALUES) {
+            return Optional.empty();
+        }
+        List<String> values = new ArrayList<>();
+        for (Tuple row : rows) {
+            if (row.isNull(column)) {
+                continue;
+            }
+            String value = row.string(column);
+            if (value.length() > MAX_LISTED_LENGTH) {
+                return Optional.empty();
+            }
+            values.add(value);
+        }
+        values.sort(null);
+        return values.isEmpty() ? Optional.empty() : Optional.of(values);
     }
 
     /**
