@@ -47,7 +47,8 @@ looking, the caller says:
 `relix_run` executes in a closed `Sandbox` that permits no external declarations. A sandbox
 always accepts what reads nothing outside the session, so a script can compute over the
 data it writes out and can reach nothing else. The sandbox's limits bound each call: at
-most 200 rows per query (a longer result is cut, and says so), 10 seconds per query, and
+most 200 rows per query (a longer result is cut, and says so; `RELIX_MCP_MAX_OUTPUT_ROWS`
+sets another cap, as an evaluation's grading server does), 10 seconds per query, and
 caps on buffered rows, recursion rounds and rows passed between operators. On Lambda the
 per-query time is configurable, and a deadline bounds the whole call (below).
 

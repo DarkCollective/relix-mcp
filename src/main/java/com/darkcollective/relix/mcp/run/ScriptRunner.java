@@ -16,6 +16,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.function.BooleanSupplier;
 
@@ -58,9 +59,31 @@ public final class ScriptRunner {
      * @return the sandbox
      */
     public static Sandbox sandbox(Duration queryTimeout) {
+        return sandbox(queryTimeout, DEFAULT_MAX_OUTPUT_ROWS);
+    }
+
+    /** How many rows one query returns by default; a longer result is cut, and says so. */
+    public static final int DEFAULT_MAX_OUTPUT_ROWS = 200;
+
+    /** The variable giving how many rows one query returns. */
+    public static final String MAX_OUTPUT_ROWS_VARIABLE = "RELIX_MCP_MAX_OUTPUT_ROWS";
+
+    /**
+     * The server's limits, with {@code queryTimeout} as the time one query may run and
+     * {@code maxOutputRows} as the rows it returns.
+     *
+     * <p>The row cap keeps what a model reads short. A client that grades results, such as
+     * an evaluation's own server, raises it, so a result is compared whole rather than cut at
+     * the cap, where two cuts of the same rows may differ.
+     *
+     * @param queryTimeout  how long one query may run, or null for no limit of its own
+     * @param maxOutputRows how many rows one query returns; positive
+     * @return the sandbox
+     */
+    public static Sandbox sandbox(Duration queryTimeout, int maxOutputRows) {
         Sandbox.Builder builder = Sandbox.builder()
                 .maxInputChars(100_000)
-                .maxOutputRows(200)
+                .maxOutputRows(maxOutputRows)
                 .maxMaterializedRows(100_000)
                 .maxFixpointRounds(1_000)
                 .maxProcessedRows(10_000_000);
@@ -68,6 +91,30 @@ public final class ScriptRunner {
             builder.timeout(queryTimeout);
         }
         return builder.build();
+    }
+
+    /**
+     * How many rows one query returns, from the environment.
+     *
+     * @param env the server's environment
+     * @return {@value #DEFAULT_MAX_OUTPUT_ROWS}, or what {@value #MAX_OUTPUT_ROWS_VARIABLE} says
+     * @throws IllegalStateException if it says anything but a positive whole number
+     */
+    public static int maxOutputRows(Map<String, String> env) {
+        String value = env.get(MAX_OUTPUT_ROWS_VARIABLE);
+        if (value == null) {
+            return DEFAULT_MAX_OUTPUT_ROWS;
+        }
+        try {
+            int n = Integer.parseInt(value.strip());
+            if (n > 0) {
+                return n;
+            }
+        } catch (NumberFormatException e) {
+            // reported below, as zero is
+        }
+        throw new IllegalStateException(MAX_OUTPUT_ROWS_VARIABLE + " takes a positive whole "
+                + "number, the most rows one query returns, not '" + value + "'");
     }
 
     /**
