@@ -266,9 +266,11 @@ def _value(value, kind: str):
     if isinstance(value, bool):
         return value
     if isinstance(value, (int, float)) or (kind == "NUMBER" and isinstance(value, str)):
+        # To 9 significant digits: the server prints a computed value to 10 decimal places
+        # and a gold may carry 20, and 2.5186777748 is 2.51867777130171996775 for any answer.
         try:
-            return decimal.Decimal(str(value)).normalize()
-        except decimal.InvalidOperation:
+            return decimal.Decimal(f"{float(decimal.Decimal(str(value))):.9g}").normalize()
+        except (decimal.InvalidOperation, ValueError, OverflowError):
             return str(value)
     return value if isinstance(value, str) else json.dumps(value, sort_keys=True)
 
@@ -280,12 +282,17 @@ def _columns(result: dict) -> list[list]:
 
 
 def compare(gold: dict, answer: dict) -> str:
-    """'match', 'extra_columns' (gold's columns and rows, plus more columns) or 'mismatch'.
+    """'match', 'extra_columns' (gold's columns and rows, plus more columns),
+    'missing_columns' (gold's rows, with only some of its columns) or 'mismatch'.
 
     A model column stands for a gold column when their values agree as multisets;
     then the rows, projected onto that assignment, must agree as a multiset too.
     """
     gold_cols, answer_cols = _columns(gold), _columns(answer)
+    if 0 < len(answer_cols) < len(gold_cols) and compare(answer, gold) == "extra_columns":
+        # The gold's rows, but fewer of its columns: the counterpart of extra_columns, a
+        # reading of which columns to show rather than wrong rows.
+        return "missing_columns"
     if len(answer_cols) < len(gold_cols) or (gold_cols and len(gold_cols[0]) != len(answer_cols[0])):
         return "mismatch"
     if not gold_cols:
@@ -314,7 +321,7 @@ def best(gold: dict, results: list[dict]) -> tuple[str, dict | None]:
     script is graded by its best query rather than its last.
     """
     graded = [(compare(gold, r), r) for r in results]
-    for grade in ("match", "extra_columns"):
+    for grade in ("match", "extra_columns", "missing_columns"):
         for g, r in graded:
             if g == grade:
                 return g, r
@@ -329,7 +336,7 @@ def best_reading(golds: list[dict | None], results: list[dict]) -> tuple[str, di
     and which reading it matched (0 for the canonical one), or None when none did.
     """
     fallback = ("mismatch", results[-1] if results else None, None)
-    for wanted in ("match", "extra_columns"):
+    for wanted in ("match", "extra_columns", "missing_columns"):
         for n, gold in enumerate(golds):
             if gold is not None:
                 grade, result = best(gold, results)
@@ -393,6 +400,8 @@ def described(key: str, tables: list[dict]) -> str:
     for t in tables:
         columns = ", ".join(f"{c} {ty}" for c, ty in zip(t["columns"], t["types"]))
         lines.append(f"- {t['name']} ({t['rows']} rows): {columns}")
+        for column, values in (t.get("values") or {}).items():
+            lines.append(f"  {column} is one of: {', '.join(values)}")
     return "\n".join(lines)
 
 
@@ -402,9 +411,57 @@ def described(key: str, tables: list[dict]) -> str:
 CLIENT_ONLY = {"relix_load", "relix_unload"}
 
 
+# A tool the harness answers itself, as a client would: the model's way to say a question
+# cannot be answered as written, rather than guessing. No user is there to reply, so the
+# answer tells it to choose a reading and say which; with --on-ask stop, asking ends the
+# question instead, graded "asked".
+ASK_USER = {"type": "function", "function": {
+    "name": "ask_user",
+    "description": "Ask the user what they mean, when the question cannot be answered as "
+                   "written: a word that is neither a column nor one of a column's values, or a "
+                   "choice the question leaves open that the data cannot settle. Check the data "
+                   "first; ask only what it cannot tell you.",
+    "parameters": {"type": "object", "required": ["question"], "properties": {
+        "question": {"type": "string", "description": "the one thing you need the user to say"}}}}}
+
+NO_ONE_TO_ASK = ("The user is not available to answer. Choose the most reasonable reading of the "
+                 "question, say which you chose in your assumption line, and finish with relix_submit.")
+
+# LM Studio drops a call whose arguments do not parse and returns an empty message; a client
+# that says so lets the model make the call again, as most agent clients report a malformed call.
+DROPPED_CALL = ("Your last tool call was not made: its arguments were not valid JSON, often because "
+                "of an unescaped quote or line break inside the script. Make the call again.")
+DROPPED_RETRIES = 2
+
+_LEAKED = re.compile(r"(?:to=functions\.|\b)(relix_\w+|ask_user)\b[^{]*?(\{.*\})", re.DOTALL)
+
+
+def leaked_call(content: str) -> tuple[str, dict] | None:
+    """A tool call the model wrote into its reply instead of making it, or None.
+
+    gpt-oss sometimes emits its call in its own format, `to=functions.relix_submit ...
+    <|message|>{"script": ...}`, which LM Studio passes through as text rather than parsing,
+    and sometimes writes `relix_submit {"script": ...}`. Either is a call the model meant to
+    make, so the harness makes it, and counts it as recovered.
+    """
+    for match in _LEAKED.finditer(content):
+        text = match.group(2)
+        for end in range(len(text), 0, -1):  # the longest prefix that is one JSON object
+            if text[end - 1] != "}":
+                continue
+            try:
+                arguments = json.loads(text[:end])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(arguments, dict):
+                return match.group(1), arguments
+    return None
+
+
 def ask(item: dict, data: str, prompt: str, server: McpServer, args) -> dict:
     offered = [t for t in server.tools if args.data != "key" or t["name"] not in CLIENT_ONLY]
-    tools = openai_tools(offered)
+    tools = openai_tools(offered) + [ASK_USER]
+    callable_names = {t["name"] for t in offered} | {"ask_user"}
     if args.data == "key":
         given = described(*server.load(item["suite"], data))
     else:
@@ -412,10 +469,14 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args) -> dict:
     messages = [{"role": "system", "content": prompt},
                 {"role": "user", "content": f"{given}\n\n{item['instruction']}"}]
     events, calls, failures, topics, runs = [], 0, [], [], []
+    asks, recovered, retries = [], 0, 0
     submission, final_text, stop = None, "", "turns"
     started = time.time()
     for _ in range(args.max_turns):
-        payload = {"model": args.model, "messages": messages, "tools": tools, **SAMPLING}
+        # Until it submits, every turn must be a call (--tool-choice required), so the only way
+        # to finish is relix_submit; after it, one turn with no calls for the closing reply.
+        payload = {"model": args.model, "messages": messages, "tools": tools,
+                   "tool_choice": "none" if submission is not None else args.tool_choice, **SAMPLING}
         try:
             reply = chat(args.api, payload, args.timeout)
         except urllib.error.HTTPError as e:
@@ -432,6 +493,13 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args) -> dict:
         # The reasoning is not sent back. Passing it in later turns' content made gpt-oss
         # restart its plan after every call: it re-solved and re-submitted answered questions,
         # and repeated one lookup twenty times.
+        if not tool_calls and submission is None:
+            leaked = leaked_call(content)
+            if leaked:
+                recovered += 1
+                tool_calls = [{"id": f"recovered-{recovered}", "type": "function", "recovered": True,
+                               "function": {"name": leaked[0], "arguments": json.dumps(leaked[1])}}]
+                events[-1]["recovered"] = leaked[0]
         messages.append({"role": "assistant", "content": content,
                          **({"tool_calls": tool_calls} if tool_calls else {})})
         if not tool_calls:
@@ -439,6 +507,11 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args) -> dict:
             if submission:
                 stop = "answered"
             elif not content.strip():
+                if retries < DROPPED_RETRIES:
+                    retries += 1
+                    messages.append({"role": "user", "content": DROPPED_CALL})
+                    events.append({"harness": DROPPED_CALL})
+                    continue
                 stop = "dropped_tool_call"  # LM Studio omits a call whose arguments don't parse
             else:
                 stop = "stopped_without_submit"
@@ -458,9 +531,12 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args) -> dict:
             if arguments is None:
                 result = {"content": [{"type": "text", "text": "The arguments were not valid JSON."}],
                           "isError": True}
-            elif name not in {t["name"] for t in offered}:
+            elif name not in callable_names:
                 result = {"content": [{"type": "text", "text": f"There is no tool called {name}."}],
                           "isError": True}
+            elif name == "ask_user":
+                asks.append({"call": calls, "question": str(arguments.get("question", ""))})
+                result = {"content": [{"type": "text", "text": NO_ONE_TO_ASK}]}
             else:
                 result = server.call(name, arguments)
             if name == "relix_learn" and arguments:
@@ -481,10 +557,14 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args) -> dict:
                            **({"rows": results[-1]} if finished else {})})
             messages.append({"role": "tool", "tool_call_id": call.get("id", ""),
                              "content": text_of(result)})
+        if asks and submission is None and args.on_ask == "stop":
+            stop = "asked"
+            break
         if calls >= args.max_calls and submission is None:
             stop = "call_limit"
             break
     return {"events": events, "calls": calls, "failures": failures, "learn": topics, "runs": runs,
+            "asks": asks, "recovered": recovered, "retries": retries,
             "submission": submission, "final_text": final_text, "stop": stop,
             "seconds": round(time.time() - started, 1)}
 
@@ -508,6 +588,12 @@ def main(argv=None) -> int:
                         help="'key' (the default) loads each suite once with relix_load and gives the "
                              "model its key and columns; 'inline' puts the declarations in the question "
                              "for the model to copy into every script")
+    parser.add_argument("--tool-choice", choices=("required", "auto"), default="required",
+                        help="'required' (the default): every turn before relix_submit must be a tool "
+                             "call, so the model cannot end by writing its answer as text; 'auto' as before")
+    parser.add_argument("--on-ask", choices=("continue", "stop"), default="continue",
+                        help="when the model calls ask_user: 'continue' (the default) tells it no one can "
+                             "answer and to choose a reading; 'stop' ends the question, graded 'asked'")
     parser.add_argument("--prompt", help=f"the system prompt (default: {os.path.basename(DEFAULT_PROMPT)}, "
                                          f"or {os.path.basename(INLINE_PROMPT)} with --data inline)")
     parser.add_argument("--launcher", default=DEFAULT_LAUNCHER)
@@ -594,7 +680,9 @@ def main(argv=None) -> int:
         answer = None
         right_at = None
         reading = None
-        if outcome["submission"] is None:
+        if outcome["submission"] is None and outcome["stop"] == "asked":
+            grade = "asked"
+        elif outcome["submission"] is None:
             grade = "no_submit"
             # Did a run show the right rows, though no answer was given? Then the model
             # solved it and failed only to finish: a different problem from not solving it.
@@ -621,7 +709,8 @@ def main(argv=None) -> int:
                       submitted=submitted, altered_tables=altered,
                       assumption="ssum" in outcome["final_text"],
                       raw_tokens="<|" in outcome["final_text"], seconds=outcome["seconds"],
-                      accepted_reading=reading,
+                      accepted_reading=reading, asks=outcome["asks"],
+                      recovered_calls=outcome["recovered"], dropped_call_retries=outcome["retries"],
                       gold_columns=(gold or {}).get("columns"),
                       answer_columns=(answer or {}).get("columns"))
         with open(os.path.join(out, "transcripts", item["id"].replace(":", "-") + ".json"), "w") as f:
@@ -667,7 +756,12 @@ def summary(records: list[dict], args, server_info: dict) -> str:
                   f"{sum(1 for r in records if r['altered_tables'])}. "
                   f"Replies with an assumption line: {sum(1 for r in records if r['assumption'])}. "
                   f"Passes on a reading other than the canonical gold: "
-                  f"{sum(1 for r in records if r.get('accepted_reading'))}.", "",
+                  f"{sum(1 for r in records if r.get('accepted_reading'))}. "
+                  f"Calls recovered from the reply's text: "
+                  f"{sum(r.get('recovered_calls', 0) for r in records)}. "
+                  f"Dropped calls retried: {sum(r.get('dropped_call_retries', 0) for r in records)}. "
+                  f"Questions where the model asked the user: "
+                  f"{sum(1 for r in records if r.get('asks'))}.", "",
               "## By category", "", "| category | pass | of |", "|---|---|---|"]
     by_category = collections.defaultdict(list)
     for r in records:
@@ -675,6 +769,14 @@ def summary(records: list[dict], args, server_info: dict) -> str:
     for category in sorted(by_category):
         rs = by_category[category]
         lines.append(f"| {category} | {sum(r['grade'] == 'match' for r in rs)} | {len(rs)} |")
+    asked = [r for r in records if r.get("asks")]
+    if asked:
+        lines += ["", "## Questions the model asked about", "",
+                  "What it asked, and how the question then went: a question it could not answer "
+                  "as written, or one it should have checked the data for.", ""]
+        for r in sorted(asked, key=lambda r: r["id"]):
+            for a in r["asks"]:
+                lines.append(f"- {r['id']} ({r['grade']}): > {r['instruction']}  \n  asked: {a['question']}")
     lines += ["", "## Failed tool calls, by first error line", ""]
     errors = collections.Counter(
         re.sub(r"script:\d+:\d+: ", "", f["error"])[:160] for r in records for f in r["failures"])
