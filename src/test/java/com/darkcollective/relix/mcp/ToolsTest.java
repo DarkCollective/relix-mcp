@@ -70,7 +70,11 @@ class ToolsTest {
         }
 
         for (String form : forms) {
-            assertThat(new ScriptValidator().validate(tables + "query { " + form + " };",
+            // A JOIN B needs a column the two share; a join on a condition, given one, is
+            // warned that the right input's copy is renamed, so it is checked without it.
+            String over = form.equals("A JOIN B") ? tables : tables.replace(
+                    "| a_id | tag |\n|------|-----|", "| a_id | b_tag |\n|------|-------|");
+            assertThat(new ScriptValidator().validate(over + "query { " + form + " };",
                     Map.of(), CallerCatalog.empty()).render()).as(form).isEqualTo("Valid.");
         }
     }

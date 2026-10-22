@@ -77,8 +77,11 @@ public final class Main {
             return;
         }
         DataKeys keys;
+        ScriptRunner runner;
         try {
             keys = new DataKeys(new InMemoryDataStore(), DataKeys.maxKeys(System.getenv()));
+            runner = new ScriptRunner(ScriptRunner.sandbox(ScriptRunner.DEFAULT_QUERY_TIMEOUT,
+                    ScriptRunner.maxOutputRows(System.getenv())));
         } catch (IllegalStateException e) {
             System.err.println("relix-mcp: " + e.getMessage());
             System.exit(2);
@@ -86,7 +89,7 @@ public final class Main {
         }
         if (options.http()) {
             LocalHttpServer server = serveHttp(new InetSocketAddress(options.host(), options.port()),
-                    keys);
+                    keys, runner);
             System.err.println("relix-mcp " + version() + " serving MCP at " + server.uri());
             Runtime.getRuntime().addShutdownHook(new Thread(server::close));
         } else {
@@ -95,7 +98,7 @@ public final class Main {
                     .serverInfo(serverInfo())
                     .instructions(INSTRUCTIONS)
                     .capabilities(ServerCapabilities.builder().tools(false).build())
-                    .tools(new Tools(new ScriptRunner(), keys).all().stream().map(tool ->
+                    .tools(new Tools(runner, keys).all().stream().map(tool ->
                             new McpServerFeatures.SyncToolSpecification(tool.tool(),
                                     (exchange, request) -> tool.call().apply(request,
                                             Authenticator.LOCAL, () -> false))).toList())
@@ -125,9 +128,24 @@ public final class Main {
      * @throws IOException if the address cannot be bound
      */
     static LocalHttpServer serveHttp(InetSocketAddress address, DataKeys keys) throws IOException {
+        return serveHttp(address, keys, new ScriptRunner());
+    }
+
+    /**
+     * Serves the tools over HTTP at {@code address}, keeping loaded data in {@code keys} and
+     * running scripts with {@code runner}.
+     *
+     * @param address where to listen; port 0 picks a free one
+     * @param keys    where {@code relix_load} keeps data
+     * @param runner  runs the scripts {@code relix_run} is given
+     * @return the running server, which the caller closes
+     * @throws IOException if the address cannot be bound
+     */
+    static LocalHttpServer serveHttp(InetSocketAddress address, DataKeys keys, ScriptRunner runner)
+            throws IOException {
         StatelessHttpTransport transport = new StatelessHttpTransport(McpJsonDefaults.getMapper(),
                 LocalHttpServer.securityFor(address.getAddress()));
-        statelessServer(transport, new ScriptRunner(), keys);
+        statelessServer(transport, runner, keys);
         return LocalHttpServer.start(address, transport);
     }
 
