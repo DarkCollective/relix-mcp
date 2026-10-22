@@ -79,7 +79,7 @@ Each run writes `runs/<timestamp>/`:
 ## Finishing, and asking
 
 A question ends with `relix_submit`. A model that stops without it, writing its answer
-as text, is told once (`--reminders`, default 1) that only `relix_submit` answers, and
+as text, is told up to twice (`--reminders`, default 2) that only `relix_submit` answers, and
 graded on what it submits then; the summary gives the pass rate with and without those.
 `--tool-choice required` asks the API to allow only tool calls before it, but LM Studio
 ignored it for gpt-oss-20b, so `auto` is the default. The harness also:
@@ -88,7 +88,10 @@ ignored it for gpt-oss-20b, so `auto` is the default. The harness also:
   `to=functions.relix_submit … {…}` or `relix_submit {…}`, which LM Studio passes through
   as text, and counts it as recovered;
 - tells the model when LM Studio dropped its call because the arguments were not valid
-  JSON, up to twice, so it can make the call again.
+  JSON, up to twice, so it can make the call again;
+- tells it the same when its reply is a call's markup with no arguments
+  (`<|channel|>relix_run?commentary=true}`), up to twice, rather than reminding it to
+  submit.
 
 The model may call `ask_user`, a tool the harness answers itself, when a question cannot be
 answered as written. No user is there, so by default (`--on-ask continue`) it is told to

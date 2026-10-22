@@ -463,6 +463,20 @@ NOT_SUBMITTED = ("You have not called relix_submit, so there is no answer yet: a
                  "written in your reply do not count. If you have the script, call relix_submit with "
                  "it now. If the question cannot be answered as written, call ask_user.")
 
+# gpt-oss sometimes emits the start of a call in its own format and no arguments at all:
+# `<|channel|>relix_run?commentary=true}` or `to=relix_run?`. That is a call it meant to
+# make and could not finish, not an answer, so it is told to make the call again, as a
+# dropped call is, rather than reminded to submit.
+GARBLED_CALL = ("Your last tool call came through garbled, as text and without its arguments, "
+                "so it was not made. Make the call again, as a tool call.")
+_CALL_MARKUP = re.compile(r"<\|(?:channel|message|call|constrain)\|>|\bto=(?:functions\.)?(?:relix_\w+|ask_user)\b")
+
+
+def garbled_call(content: str) -> bool:
+    """Whether a reply is the markup of a tool call with nothing to make of it."""
+    return bool(_CALL_MARKUP.search(content)) and leaked_call(content) is None
+
+
 _LEAKED = re.compile(r"(?:to=functions\.|\b)(relix_\w+|ask_user)\b[^{]*?(\{.*\})", re.DOTALL)
 
 
@@ -499,7 +513,7 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args) -> dict:
     messages = [{"role": "system", "content": prompt},
                 {"role": "user", "content": f"{given}\n\n{item['instruction']}"}]
     events, calls, failures, topics, runs = [], 0, [], [], []
-    asks, recovered, retries, reminders = [], 0, 0, 0
+    asks, recovered, retries, reminders, garbled = [], 0, 0, 0, 0
     submission, final_text, stop = None, "", "turns"
     started = time.time()
     for _ in range(args.max_turns):
@@ -543,6 +557,11 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args) -> dict:
                     events.append({"harness": DROPPED_CALL})
                     continue
                 stop = "dropped_tool_call"  # LM Studio omits a call whose arguments don't parse
+            elif garbled_call(content) and garbled < DROPPED_RETRIES:
+                garbled += 1
+                messages.append({"role": "user", "content": GARBLED_CALL})
+                events.append({"harness": GARBLED_CALL})
+                continue
             else:
                 if reminders < args.reminders:
                     reminders += 1
@@ -600,6 +619,7 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args) -> dict:
             break
     return {"events": events, "calls": calls, "failures": failures, "learn": topics, "runs": runs,
             "asks": asks, "recovered": recovered, "retries": retries, "reminders": reminders,
+            "garbled": garbled,
             "submission": submission, "final_text": final_text, "stop": stop,
             "seconds": round(time.time() - started, 1)}
 
@@ -626,9 +646,9 @@ def main(argv=None) -> int:
     parser.add_argument("--tool-choice", choices=("auto", "required"), default="auto",
                         help="sent as tool_choice before relix_submit; LM Studio ignored 'required' for "
                              "gpt-oss-20b (it still answered in text), so 'auto' is the default")
-    parser.add_argument("--reminders", type=int, default=1,
+    parser.add_argument("--reminders", type=int, default=2,
                         help="how many times a model that stops without submitting is told to submit "
-                             "(default 1; 0 grades its first stop, as before)")
+                             "(default 2; 0 grades its first stop, as before)")
     parser.add_argument("--on-ask", choices=("continue", "stop"), default="continue",
                         help="when the model calls ask_user: 'continue' (the default) tells it no one can "
                              "answer and to choose a reading; 'stop' ends the question, graded 'asked'")
@@ -761,6 +781,7 @@ def main(argv=None) -> int:
                       raw_tokens="<|" in outcome["final_text"], seconds=outcome["seconds"],
                       accepted_reading=reading, asks=outcome["asks"], regraded_whole=regraded,
                       recovered_calls=outcome["recovered"], dropped_call_retries=outcome["retries"],
+                      garbled_call_retries=outcome["garbled"],
                       submitted_after_reminder=bool(outcome["reminders"] and outcome["submission"]),
                       gold_columns=(gold or {}).get("columns"),
                       answer_columns=(answer or {}).get("columns"))
@@ -818,6 +839,7 @@ def summary(records: list[dict], args, server_info: dict) -> str:
                   f"Calls recovered from the reply's text: "
                   f"{sum(r.get('recovered_calls', 0) for r in records)}. "
                   f"Dropped calls retried: {sum(r.get('dropped_call_retries', 0) for r in records)}. "
+                  f"Garbled calls retried: {sum(r.get('garbled_call_retries', 0) for r in records)}. "
                   f"Submitted after a reminder: "
                   f"{sum(1 for r in records if r.get('submitted_after_reminder'))}. "
                   f"Questions where the model asked the user: "
