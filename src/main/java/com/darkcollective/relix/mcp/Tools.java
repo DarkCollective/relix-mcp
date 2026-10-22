@@ -688,7 +688,9 @@ final class Tools {
         String rendered = report.render(scriptOnly(text, named));
         return CallToolResult.builder()
                 .addTextContent(named.after(!report.valid() ? ForeignCode.lead(text, rendered)
-                        : ranToTheEnd(report) ? rendered + "\n\n" + SUBMIT_REMINDER : rendered))
+                        : !ranToTheEnd(report) ? rendered
+                        : warnings(report) > 0 ? rendered + "\n\n" + warningsFirst(warnings(report))
+                        : rendered + "\n\n" + SUBMIT_REMINDER))
                 .structuredContent(named.into(asData(report)))
                 .build();
     }
@@ -701,6 +703,34 @@ final class Tools {
     static final String SUBMIT_REMINDER = "If these are the rows the question asks for, call "
             + "relix_submit with this same script: a script or rows written in your reply are "
             + "not an answer.";
+
+    /**
+     * What a run with warnings ends with, in place of {@link #SUBMIT_REMINDER}. A model reads
+     * rows that look right and submits them, past a warning that says they are not: a join
+     * that renamed the column it then projects returns the wrong column's values, quietly.
+     * So the warning, not the rows, is what this points the model to.
+     */
+    static String warningsFirst(long warnings) {
+        return "This ran with " + count(warnings, "warning") + ", above. A warning often means "
+                + "these are not the rows the question asks for: fix the script, or be sure the "
+                + "warning does not matter, before calling relix_submit.";
+    }
+
+    /** What a submission with warnings ends with: the answer stands, and says what it carries. */
+    static String submittedWithWarnings(long warnings) {
+        return "This was submitted with " + count(warnings, "warning") + ", above. If one "
+                + "means these are not the rows the question asks for, fix the script and call "
+                + "relix_submit again.";
+    }
+
+    /** How many of a valid run's findings are warnings: all of them, since none is an error. */
+    private static long warnings(RunReport report) {
+        return report.findings().stream().filter(f -> !f.isError()).count();
+    }
+
+    private static String count(long n, String noun) {
+        return n + " " + noun + (n == 1 ? "" : "s");
+    }
 
     /** Whether every query ran and returned its rows, so they could be an answer. */
     private static boolean ranToTheEnd(RunReport report) {
@@ -746,6 +776,7 @@ final class Tools {
         String rendered = report.render(scriptOnly(text, named));
         String answer = submitted
                 ? SUBMITTED + "\n\n" + fenced(text) + "\n\n" + rendered
+                        + (warnings(report) > 0 ? "\n\n" + submittedWithWarnings(warnings(report)) : "")
                 : "Not submitted: " + (report.valid()
                         ? "the run was stopped before every query finished. Make the script "
                                 + "cheaper, then call 'relix_submit' again."

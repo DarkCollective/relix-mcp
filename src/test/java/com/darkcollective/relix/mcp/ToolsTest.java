@@ -562,6 +562,26 @@ class ToolsTest {
                 .doesNotContain(Tools.SUBMIT_REMINDER);
     }
 
+    /**
+     * A run with a warning ends by pointing at the warning, not by saying to submit: a model
+     * submitted rows from a join that had renamed the column it projected, past the warning
+     * that said so. A submission with a warning stands, and says it has one.
+     */
+    @Test
+    void aRunWithWarningsPointsAtThemBeforeSubmitting() {
+        String tables = "R := [\n| room_id | name |\n|---|---|\n| 1 | Garage |\n];\n"
+                + "D := [\n| id | room_id | name |\n|---|---|---|\n| 9 | 1 | Garage Device 1 |\n];\n";
+        String script = tables + "V := { R >< R.room_id = D.room_id D };\nquery { PROJECT id, name (V) };";
+
+        String ran = text(tools.run(call("relix_run", Map.of("script", script))));
+        assertThat(ran).contains("name_r").endsWith("\n\n" + Tools.warningsFirst(1))
+                .doesNotContain(Tools.SUBMIT_REMINDER);
+
+        CallToolResult submitted = tools.submit(call("relix_submit", Map.of("script", script)));
+        assertThat(((Map<?, ?>) submitted.structuredContent()).get("submitted")).isEqualTo(true);
+        assertThat(text(submitted)).endsWith("\n\n" + Tools.submittedWithWarnings(1));
+    }
+
     /** A script whose eighth line uses SQL's SELECT list, below an inline table. */
     private static final String SQL_SELECT_ON_LINE_8 = """
             T := [
