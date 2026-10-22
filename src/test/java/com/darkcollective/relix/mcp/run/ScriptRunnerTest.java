@@ -248,4 +248,28 @@ class ScriptRunnerTest {
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> new ScriptRunner(Sandbox.open()))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void theRowCapIsReadFromTheEnvironmentAndCutsAResultThere() {
+        assertThat(ScriptRunner.maxOutputRows(java.util.Map.of())).isEqualTo(ScriptRunner.DEFAULT_MAX_OUTPUT_ROWS);
+        assertThat(ScriptRunner.maxOutputRows(java.util.Map.of(ScriptRunner.MAX_OUTPUT_ROWS_VARIABLE, " 5000 ")))
+                .isEqualTo(5000);
+        for (String wrong : List.of("0", "-3", "lots", "")) {
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> ScriptRunner.maxOutputRows(
+                            java.util.Map.of(ScriptRunner.MAX_OUTPUT_ROWS_VARIABLE, wrong)))
+                    .as(wrong).isInstanceOf(IllegalStateException.class);
+        }
+
+        StringBuilder rows = new StringBuilder("N := [\n| n |\n|---|\n");
+        for (int i = 1; i <= 300; i++) {
+            rows.append("| ").append(i).append(" |\n");
+        }
+        String script = rows + "];\nquery N;";
+        RunReport capped = new ScriptRunner(ScriptRunner.sandbox(Duration.ofSeconds(10), 250)).run(script);
+        assertThat(capped.results().getFirst().rows()).hasSize(250);
+        assertThat(capped.results().getFirst().truncated()).isTrue();
+        RunReport whole = new ScriptRunner(ScriptRunner.sandbox(Duration.ofSeconds(10), 1000)).run(script);
+        assertThat(whole.results().getFirst().rows()).hasSize(300);
+        assertThat(whole.results().getFirst().truncated()).isFalse();
+    }
 }
