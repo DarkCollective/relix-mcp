@@ -257,14 +257,39 @@ def graded_as(gold: str, result: dict) -> dict:
 
     A CLUSTER numbers its clusters 1, 2, ..., but any labels that group the same rows are
     as right, so its label column ("partition") is compared as a partition. A GROUPING SETS
-    result ("grouping_sets") may be answered by one query per grouping, graded stacked.
+    result ("grouping_sets", its sets of columns) may be answered by one query per
+    grouping, graded stacked, or by one result laid out long, graded against the gold
+    unpivoted.
     """
     label = _CLUSTER_LABEL.search(gold)
     if label and label.group(1) in result["columns"]:
         result = {**result, "partition": label.group(1)}
-    if _GROUPING_SETS.search(gold):
-        result = {**result, "grouping_sets": True}
+    sets = _GROUPING_SETS.search(gold)
+    if sets:
+        result = {**result, "grouping_sets": _sets(gold[sets.end():])}
     return result
+
+
+def _sets(text: str) -> list[list[str]]:
+    """The column sets of a GROUPING SETS list that opens text: ((a), (b, c), ()) is
+    [["a"], ["b", "c"], []], and a bare column stands for a set of its own."""
+    sets, depth, current = [], 0, None
+    for token in re.findall(r"\w+|[()]", text[text.find("("):]):
+        if token == "(":
+            depth += 1
+            if depth == 2:
+                current = []
+        elif token == ")":
+            depth -= 1
+            if depth == 1:
+                sets.append(current)
+            elif depth == 0:
+                break
+        elif depth == 2:
+            current.append(token)
+        elif depth == 1:
+            sets.append([token])
+    return sets
 
 
 def choose(items: list[dict], per_category: int, seed: int,
@@ -391,6 +416,38 @@ def stacked(gold: dict, results: list[dict]) -> dict | None:
             "stacked": len(parts)}
 
 
+def unpivoted(gold: dict) -> dict | None:
+    """A GROUPING SETS gold laid out long: a label naming each row's grouping, the value
+    it groups by, then the gold's other columns. The label is compared as a partition,
+    so an answer may spell it as it likes. A value is text when the groupings mix text
+    and numbers, as an answer's one value column must be. None when a set has more than
+    one column, which has no one value to lay out."""
+    sets = gold.get("grouping_sets") or []
+    if not sets or any(len(s) > 1 for s in sets):
+        return None
+    keys = [s[0] for s in sets if s]
+    if not all(k in gold["columns"] for k in keys):
+        return None
+    at = {k: gold["columns"].index(k) for k in keys}
+    rest = [i for i, c in enumerate(gold["columns"]) if c not in at]
+    rows = []
+    for row in gold.get("rows") or []:
+        key = next((k for k in keys if row[at[k]] is not None), None)
+        rows.append([key, None if key is None else row[at[key]]] + [row[i] for i in rest])
+    values = [r[1] for r in rows if r[1] is not None]
+    numeric = all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in values)
+    if not numeric:
+        for r in rows:
+            if isinstance(r[1], float) and r[1].is_integer():
+                r[1] = str(int(r[1]))
+            elif r[1] is not None:
+                r[1] = str(r[1])
+    types = gold.get("types") or [""] * len(gold["columns"])
+    return {"columns": ["grouping", "value"] + [gold["columns"][i] for i in rest],
+            "types": ["STRING", "NUMBER" if numeric else "STRING"] + [types[i] for i in rest],
+            "rows": rows, "partition": "grouping"}
+
+
 GRADING_ROWS = 100_000
 
 # The grades whose rows are the gold's, whichever columns carry them.
@@ -422,12 +479,16 @@ def best(gold: dict, results: list[dict]) -> tuple[str, dict | None]:
     A model asked for "all details" of something often adds a query per related table; the
     answer is the one that holds the rows asked for, wherever it comes in the script, so a
     script is graded by its best query rather than its last. A GROUPING SETS gold is also
-    compared with the script's results stacked, after each one alone.
+    compared with the script's results stacked, after each one alone, and each result is
+    compared with the gold laid out long.
     """
     graded = [(compare(gold, r), r) for r in results]
     combined = stacked(gold, results) if gold.get("grouping_sets") else None
     if combined is not None:
         graded.append((compare(gold, combined), combined))
+    long = unpivoted(gold)
+    if long is not None:
+        graded += [(compare(long, r), r) for r in results]
     for grade in ("match", "extra_columns", "missing_columns"):
         for g, r in graded:
             if g == grade:
