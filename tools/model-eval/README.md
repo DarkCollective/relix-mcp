@@ -123,3 +123,13 @@ means the gold's rows were all there with more columns than asked for;
 `extra_columns`: a reading of which columns to show, not wrong rows; `mismatch` means
 different rows; numbers are compared to 9 significant digits; `data_altered` means different rows from a script whose copy of a table it reads differs from the data given (the model retyped it), kept apart from a wrong query; it arises only with `--data inline`, since over a data key the server ignores a table the script declares again; `right_not_submitted` means the model never submitted, but one of its `relix_run` calls returned the right rows (the summary says which call), so it solved the question and failed only to finish; `no_submit` means it never submitted and no run of it was right. The summary's "right rows reached" counts `match`, `extra_columns` and `right_not_submitted`.
 Row order isn't graded.
+
+Two golds leave an answer free in a way the values alone don't show. A `CLUSTER`'s
+label column (the one its `AS` names) is compared as a partition: an answer passes when
+it groups the same rows together, whatever labels it gives the groups, while every other
+column must still match exactly. A `GROUPING SETS` gold is also compared with the
+script's results stacked: those whose columns are all gold columns, by name, lined up
+with the gold's columns and NULL where a result lacks one, so a question asked
+"separately" passes when answered with one query per grouping (`stacked` in the
+transcript's `answer_result` gives how many). The grading tests run with
+`python3 -m unittest discover -s tools/model-eval`.
