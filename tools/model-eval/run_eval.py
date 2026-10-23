@@ -58,6 +58,9 @@ DEFAULT_MODEL = "openai/gpt-oss-20b"
 SAMPLING = {"temperature": 0.8, "top_p": 0.8, "top_k": 40, "min_p": 0.05, "repeat_penalty": 1.1,
             "reasoning_effort": "medium"}
 
+# A data key idle this long is loaded again: the server keeps one for an hour after its last use.
+KEY_IDLE_LIMIT = 45 * 60
+
 _EXPRESSION = re.compile(r"RELIX EXPRESSION:\s*(.*?)\s*(?:EXPECTED OUTPUT:|\Z)", re.DOTALL)
 
 
@@ -76,6 +79,7 @@ class McpServer:
         self._next = 0
         self._lock = threading.Lock()
         self.keys = {}  # suite name -> (data key, tables as relix_load described them)
+        self._used = {}  # suite name -> time.monotonic() its key was last handed out
         init = self._request("initialize", {
             "protocolVersion": "2025-06-18", "capabilities": {},
             "clientInfo": {"name": "relix-model-eval", "version": "1"}})
@@ -107,9 +111,15 @@ class McpServer:
         return self._request("tools/call", {"name": name, "arguments": arguments})
 
     def load(self, suite: str, data: str) -> tuple[str, list[dict]]:
-        """The suite's data key on this server, loading the data the first time it is asked for."""
+        """The suite's data key on this server, loading the data the first time it is asked for,
+        and again once the key may have expired: the server drops a key an hour after its last
+        use, and the grading server can sit hours between a suite's gold results and a re-run."""
         with self._lock:
             held = self.keys.get(suite)
+            stale = held is not None and time.monotonic() - self._used[suite] > KEY_IDLE_LIMIT
+        if stale:
+            self.call("relix_unload", {"key": held[0]})
+            held = None
         if held is None:
             # Read-only: no call, the model's included, can replace a suite table under it.
             result = self.call("relix_load", {"tables": data, "read_only": True})
@@ -119,6 +129,8 @@ class McpServer:
             held = (structured["key"], structured.get("tables") or [])
             with self._lock:
                 self.keys[suite] = held
+        with self._lock:
+            self._used[suite] = time.monotonic()
         return held
 
     def unload_all(self):
@@ -333,6 +345,9 @@ def whole_results(grader: "McpServer", item: dict, data: dict, script: str | Non
         run = grader.call("relix_run", {"script": script})
     rerun = [r for r in (run.get("structuredContent") or {}).get("results") or []
              if r.get("failure") is None]
+    if not rerun:
+        print(f"{item['id']}: re-running a cut result failed, so it is graded cut: "
+              f"{text_of(run)[:300]}", file=sys.stderr)
     return rerun or results
 
 
