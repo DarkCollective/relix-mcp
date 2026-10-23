@@ -9,6 +9,8 @@ import run_eval
 
 CLUSTER = "query { CLUSTER product_a, product_b AS bundle (also_bought) };"
 ROLLUP = "query { γ ROLLUP (sprint_id, priority), SUM(story_points) → total_points (issues) };"
+PIVOT = ("Counts := { γ room_id, status, COUNT(*) → n (devices) };\n"
+         "query { PIVOT n BY status PER room_id (Counts) };")
 GROUPING_SETS = "query { γ GROUPING SETS ((rating), (category)), COUNT(*) → review_count (reviews) };"
 
 
@@ -162,6 +164,57 @@ class SubtotalRowsMayBeLabelled(unittest.TestCase):
                         [[301, "high", 18], [301, "low", 1], [302, "high", 13],
                          [301, "Subtotal", 19], [302, "Subtotal", 13], [None, "Grand Total", 32]])
         self.assertEqual(run_eval.compare(gold, answer), "mismatch")
+
+
+class PivotCellsWithNoRowsAreZero(unittest.TestCase):
+
+    gold = run_eval.graded_as(PIVOT, result(
+        ["room_id", "offline", "online"], ["NUMBER", "NUMBER", "NUMBER"],
+        [[201, 6, 5], [202, 2, None]]))
+
+    def test_the_gold_names_its_value_columns(self):
+        self.assertEqual(self.gold["pivot_values"], ["offline", "online"])
+
+    def test_a_zero_where_the_pivot_has_null_matches(self):
+        answer = result(["room_id", "online", "offline"], ["NUMBER", "NUMBER", "NUMBER"],
+                        [[201, 5, 6], [202, 0, 2]])
+        self.assertEqual(run_eval.compare(self.gold, answer), "match")
+
+    def test_a_wrong_count_does_not_match(self):
+        answer = result(["room_id", "online", "offline"], ["NUMBER", "NUMBER", "NUMBER"],
+                        [[201, 5, 6], [202, 1, 2]])
+        self.assertEqual(run_eval.compare(self.gold, answer), "mismatch")
+
+    def test_a_key_is_not_zeroed(self):
+        gold = run_eval.graded_as(PIVOT, result(
+            ["room_id", "offline"], ["NUMBER", "NUMBER"], [[None, 6], [202, 2]]))
+        answer = result(["room_id", "offline"], ["NUMBER", "NUMBER"], [[0, 6], [202, 2]])
+        self.assertEqual(run_eval.compare(gold, answer), "mismatch")
+
+    def test_zero_is_not_null_without_pivot(self):
+        gold = {k: v for k, v in self.gold.items() if k != "pivot_values"}
+        answer = result(["room_id", "online", "offline"], ["NUMBER", "NUMBER", "NUMBER"],
+                        [[201, 5, 6], [202, 0, 2]])
+        self.assertEqual(run_eval.compare(gold, answer), "mismatch")
+
+
+class ADayIsItsMidnight(unittest.TestCase):
+
+    gold = result(["bucket", "sum_minutes"], ["TIMESTAMP", "NUMBER"],
+                  [["2026-10-21T00:00:00Z", 300], ["2026-10-22T00:00:00Z", 120]])
+
+    def test_dates_match_midnight_timestamps(self):
+        answer = result(["day", "total_minutes"], ["DATE", "NUMBER"],
+                        [["2026-10-22", 120], ["2026-10-21", 300]])
+        self.assertEqual(run_eval.compare(self.gold, answer), "match")
+
+    def test_another_time_of_day_is_not_the_date(self):
+        gold = result(["at"], ["TIMESTAMP"], [["2026-10-21T09:30:00Z"]])
+        self.assertEqual(run_eval.compare(gold, result(["at"], ["DATE"], [["2026-10-21"]])), "mismatch")
+
+    def test_a_midnight_in_another_zone_is_not_the_date(self):
+        gold = result(["at"], ["TIMESTAMPTZ"], [["2026-10-21T00:00:00-04:00"]])
+        self.assertEqual(run_eval.compare(gold, result(["at"], ["DATE"], [["2026-10-21"]])), "mismatch")
 
 
 if __name__ == "__main__":

@@ -251,6 +251,7 @@ def gold_result(server: McpServer, suite: str, data: str, gold: str, by_key: boo
 _CLUSTER_LABEL = re.compile(r"\bCLUSTER\b[^;{}]*?\bAS\s+(\w+)", re.IGNORECASE)
 _GROUPING_SETS = re.compile(r"\bGROUPING\s+SETS\b", re.IGNORECASE)
 _ROLLUP = re.compile(r"\b(?:ROLLUP|CUBE)\s*\(([^()]*)\)", re.IGNORECASE)
+_PIVOT = re.compile(r"\bPIVOT\s+\w+\s+BY\s+\w+\s+PER\s+([\w\s,]*?)\s*\(", re.IGNORECASE)
 
 
 def graded_as(gold: str, result: dict) -> dict:
@@ -261,7 +262,9 @@ def graded_as(gold: str, result: dict) -> dict:
     result ("grouping_sets", its sets of columns) may be answered by one query per
     grouping, graded stacked, or by one result laid out long, graded against the gold
     unpivoted. A ROLLUP or CUBE leaves NULL in its key columns ("subtotals") on a
-    subtotal row, where an answer may write a label such as 'Subtotal' instead.
+    subtotal row, where an answer may write a label such as 'Subtotal' instead. A PIVOT
+    leaves NULL in a value column ("pivot_values") where no row had that combination,
+    where an answer that sums or counts conditionally has 0.
     """
     label = _CLUSTER_LABEL.search(gold)
     if label and label.group(1) in result["columns"]:
@@ -273,6 +276,12 @@ def graded_as(gold: str, result: dict) -> dict:
             if k in result["columns"]]
     if keys:
         result = {**result, "subtotals": keys}
+    pivot = _PIVOT.search(gold)
+    if pivot:
+        per = set(re.findall(r"\w+", pivot.group(1)))
+        values = [c for c in result["columns"] if c not in per]
+        if values:
+            result = {**result, "pivot_values": values}
     return result
 
 
@@ -323,9 +332,16 @@ def choose(items: list[dict], per_category: int, seed: int,
 # Grading
 # --------------------------------------------------------------------------- #
 
+_MIDNIGHT = re.compile(r"(\d{4}-\d{2}-\d{2})T00:00(?::00(?:\.0+)?)?(?:Z|\+00:00)?")
+
+
 def _value(value, kind: str):
     if value is None:
         return None
+    if isinstance(value, str) and (midnight := _MIDNIGHT.fullmatch(value)):
+        # A day's bucket, as DOWNSAMPLE or DATE_TRUNC gives it, is the day: an answer that
+        # groups by the DATE 2026-10-21 has the same rows as one that groups by its midnight.
+        return midnight.group(1)
     if isinstance(value, bool):
         return value
     if isinstance(value, (int, float)) or (kind == "NUMBER" and isinstance(value, str)):
@@ -353,11 +369,13 @@ def compare(gold: dict, answer: dict) -> str:
     partition column is matched by how it groups the rows, not by its values: a model
     column stands for it when its groups have the same sizes, and each label is then
     compared as the rows its group holds. In a gold's subtotal column, an answer's text
-    that is none of the gold's values is taken as the NULL a subtotal row has there.
+    that is none of the gold's values is taken as the NULL a subtotal row has there. In a
+    PIVOT gold's value column, NULL and 0 are the same: no rows for that cell.
     """
     gold_cols, answer_cols = _columns(gold), _columns(answer)
     label = gold["columns"].index(gold["partition"]) if gold.get("partition") else None
     subtotals = {gold["columns"].index(k) for k in gold.get("subtotals") or []}
+    zeroed = {gold["columns"].index(k) for k in gold.get("pivot_values") or []}
     if 0 < len(answer_cols) < len(gold_cols) and compare(answer, gold) == "extra_columns":
         # The gold's rows, but fewer of its columns: the counterpart of extra_columns, a
         # reading of which columns to show rather than wrong rows.
@@ -368,8 +386,12 @@ def compare(gold: dict, answer: dict) -> str:
         return "match" if not answer_cols else "extra_columns"
     relabelled = {(i, j): _unlabelled(answer, j, gold, gold_cols[i], i)
                   for i in subtotals for j in range(len(answer_cols))}
+    for i in zeroed:
+        gold_cols[i] = _zeroed(gold_cols[i])
 
     def column(i: int, j: int) -> list:
+        if i in zeroed:
+            return _zeroed(answer_cols[j])
         return relabelled.get((i, j), answer_cols[j])
 
     sizes = [_group_sizes(c) for c in answer_cols]
@@ -402,6 +424,12 @@ def _unlabelled(answer: dict, j: int, gold: dict, gold_column: list, i: int) -> 
         value = _value(row[j], kind)
         out.append(None if isinstance(row[j], str) and repr(value) not in known else value)
     return out
+
+
+def _zeroed(column: list) -> list:
+    """A column with each NULL read as 0, as a PIVOT cell no row reached is a count of 0."""
+    zero = _value(0, "NUMBER")
+    return [zero if v is None else v for v in column]
 
 
 def _group_sizes(column: list) -> list[int]:
