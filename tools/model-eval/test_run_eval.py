@@ -79,6 +79,40 @@ class GroupingSetsAnsweredSeparatelyAreStacked(unittest.TestCase):
         grade, _ = run_eval.best(self.gold, [self.by_rating])
         self.assertEqual(grade, "mismatch")
 
+    def test_the_gold_names_its_sets(self):
+        self.assertEqual(self.gold["grouping_sets"], [["rating"], ["category"]])
+
+    def test_one_result_laid_out_long_matches(self):
+        # A label of its own spelling, each value as text, then the count.
+        long = result(["group_type", "group_value", "review_count"], ["STRING", "STRING", "NUMBER"],
+                      [["by rating", "5", 4], ["by rating", "4", 3],
+                       ["by category", "Books", 3], ["by category", "Toys", 2]])
+        self.assertEqual(run_eval.best(self.gold, [long])[0], "match")
+
+    def test_a_long_layout_in_another_column_order_matches(self):
+        long = result(["value", "review_count", "kind"], ["STRING", "NUMBER", "STRING"],
+                      [["Toys", 2, "c"], ["5", 4, "r"], ["Books", 3, "c"], ["4", 3, "r"]])
+        self.assertEqual(run_eval.best(self.gold, [long])[0], "match")
+
+    def test_a_long_layout_that_labels_a_value_with_the_wrong_grouping_does_not_match(self):
+        long = result(["group_type", "group_value", "review_count"], ["STRING", "STRING", "NUMBER"],
+                      [["rating", "5", 4], ["rating", "4", 3],
+                       ["rating", "Books", 3], ["category", "Toys", 2]])
+        self.assertEqual(run_eval.best(self.gold, [long])[0], "mismatch")
+
+    def test_a_long_layout_with_a_wrong_count_does_not_match(self):
+        long = result(["group_type", "group_value", "review_count"], ["STRING", "STRING", "NUMBER"],
+                      [["rating", "5", 4], ["rating", "4", 3],
+                       ["category", "Books", 2], ["category", "Toys", 2]])
+        self.assertEqual(run_eval.best(self.gold, [long])[0], "mismatch")
+
+    def test_sets_of_several_columns_have_no_long_layout(self):
+        gold = run_eval.graded_as(
+            "query { γ GROUPING SETS ((rating, category), ()), COUNT(*) → n (reviews) };",
+            result(["rating", "category", "n"], ["NUMBER", "STRING", "NUMBER"], [[5, "Toys", 1]]))
+        self.assertEqual(gold["grouping_sets"], [["rating", "category"], []])
+        self.assertIsNone(run_eval.unpivoted(gold))
+
     def test_results_are_not_stacked_for_a_gold_without_grouping_sets(self):
         gold = {k: v for k, v in self.gold.items() if k != "grouping_sets"}
         grade, _ = run_eval.best(gold, [self.by_rating, self.by_category])
