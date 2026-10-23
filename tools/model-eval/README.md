@@ -131,5 +131,9 @@ column must still match exactly. A `GROUPING SETS` gold is also compared with th
 script's results stacked: those whose columns are all gold columns, by name, lined up
 with the gold's columns and NULL where a result lacks one, so a question asked
 "separately" passes when answered with one query per grouping (`stacked` in the
-transcript's `answer_result` gives how many). The grading tests run with
+transcript's `answer_result` gives how many). When each of its sets is one column, each
+result is also compared with the gold laid out long: a label naming the grouping, the
+value it groups by, then the gold's other columns. The label is compared as a partition,
+so `'rating'`, `'by rating'` or `'r'` all do, and the values are text when the groupings
+mix text and numbers, as one value column must hold them. The grading tests run with
 `python3 -m unittest discover -s tools/model-eval`.
