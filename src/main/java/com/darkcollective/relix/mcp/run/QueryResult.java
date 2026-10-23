@@ -14,16 +14,21 @@ import com.darkcollective.relix.value.Value;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * What one {@code query} statement produced: its rows, or what stopped it.
  *
  * @param name      the view the query names, or null for an expression in braces
- * @param columns   the column names, in order; empty when the query failed
+ * @param columns   the column names, in order; empty when the query failed. For a
+ *                  query whose schema is open, such as a {@code PIVOT}, the names its
+ *                  rows carry, in the order first seen
  * @param types     each column's type, in the same order: a scalar as the script spells
  *                  it ({@code NUMBER}, {@code STRING}, ...), anything else as the engine
- *                  displays it
+ *                  displays it. For an open schema, the type the column's values share,
+ *                  or {@code ANY}
  * @param ordering  the order the rows are guaranteed to come in, one sort key each
  *                  ({@code spend DESC}); empty when no order is guaranteed
  * @param rows      each row's values, in column order: a number, a boolean, null, or
@@ -60,12 +65,13 @@ public record QueryResult(String name, List<String> columns, List<String> types,
      * @param result   its rows
      */
     static QueryResult of(String name, Relation query, Rows result) {
+        if (result.schema().isOpen()) {
+            return ofOpen(name, query, result);
+        }
         List<String> columns = result.schema().columns().stream()
                 .map(ColumnDefinition::name).toList();
         List<String> types = result.schema().columns().stream()
                 .map(c -> spelling(c.type())).toList();
-        List<String> ordering = query.plan().plan().deliveredOrdering().keys().stream()
-                .map(QueryResult::spelling).toList();
         List<List<Object>> rows = new ArrayList<>();
         for (Tuple tuple : result) {
             List<Object> row = new ArrayList<>(columns.size());
@@ -74,7 +80,46 @@ public record QueryResult(String name, List<String> columns, List<String> types,
             }
             rows.add(row);
         }
-        return new QueryResult(name, columns, types, ordering, rows, result.truncated(), null);
+        return new QueryResult(name, columns, types, ordering(query), rows, result.truncated(), null);
+    }
+
+    /**
+     * What a query whose schema is open returned, such as a {@code PIVOT}: its columns
+     * are known only once its rows exist. They are the names its rows carry, in the order
+     * first seen, and a row without one of them has NULL there. A column's type is the one
+     * its values share, or {@code ANY} when they share none or are all NULL.
+     */
+    private static QueryResult ofOpen(String name, Relation query, Rows result) {
+        Map<String, ScalarType> seen = new LinkedHashMap<>();
+        for (Tuple tuple : result) {
+            for (String column : tuple.columnNames()) {
+                Value value = tuple.get(column);
+                ScalarType type = value.isNull() ? null : value.type();
+                if (!seen.containsKey(column)) {
+                    seen.put(column, type);
+                } else if (type != null && seen.get(column) != type) {
+                    seen.put(column, seen.get(column) == null ? type : ScalarType.ANY);
+                }
+            }
+        }
+        List<String> columns = List.copyOf(seen.keySet());
+        List<String> types = seen.values().stream()
+                .map(t -> spelling(t == null ? ScalarType.ANY : t)).toList();
+        List<List<Object>> rows = new ArrayList<>();
+        for (Tuple tuple : result) {
+            List<String> has = tuple.columnNames();
+            List<Object> row = new ArrayList<>(columns.size());
+            for (String column : columns) {
+                row.add(has.contains(column) ? plain(tuple.get(column)) : null);
+            }
+            rows.add(row);
+        }
+        return new QueryResult(name, columns, types, ordering(query), rows, result.truncated(), null);
+    }
+
+    private static List<String> ordering(Relation query) {
+        return query.plan().plan().deliveredOrdering().keys().stream()
+                .map(QueryResult::spelling).toList();
     }
 
     static QueryResult failed(String name, String failure) {

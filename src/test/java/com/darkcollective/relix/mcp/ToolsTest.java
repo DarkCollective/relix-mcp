@@ -11,6 +11,7 @@ import io.modelcontextprotocol.spec.McpSchema.TextContent;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -230,6 +231,35 @@ class ToolsTest {
                 .map(row -> ((List<?>) row).getFirst())
                 .map(v -> v instanceof Number n ? (Object) Double.parseDouble(n.toString()) : v))
                 .containsExactly(0.1, 1.5, 9007199254740992.0, "9007199254740993", "9223372036854775807");
+    }
+
+    /**
+     * A {@code PIVOT}'s columns are known only once its rows exist, so its schema is open.
+     * Its result still has headings, taken from the rows, or a model cannot tell which
+     * value is which status.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void anOpenSchemaIsHeadedByTheColumnsItsRowsCarry() throws Exception {
+        CallToolResult result = tools.run(call("relix_run", Map.of("script", """
+                T := [
+                | country | status  | revenue |
+                |---------|---------|---------|
+                | USA     | shipped | 10      |
+                | USA     | pending | 5       |
+                | UK      | shipped | 7       |
+                ];
+                query { PIVOT revenue BY status PER country (T) };
+                """)));
+
+        Map<?, ?> data = (Map<?, ?>) McpJsonDefaults.getMapper()
+                .readValue(McpJsonDefaults.getMapper().writeValueAsString(result.structuredContent()), Map.class);
+        Map<?, ?> query = (Map<?, ?>) ((List<?>) data.get("results")).getFirst();
+        assertThat(query.get("columns")).isEqualTo(List.of("country", "shipped", "pending"));
+        assertThat(query.get("types")).isEqualTo(List.of("STRING", "NUMBER", "NUMBER"));
+        assertThat((List<Object>) query.get("rows")).containsExactlyInAnyOrder(
+                List.of("USA", 10, 5), Arrays.asList("UK", 7, null));
+        assertThat(text(result)).contains("| country STRING | shipped NUMBER | pending NUMBER |");
     }
 
     /**
