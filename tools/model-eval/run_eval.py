@@ -245,7 +245,26 @@ def gold_result(server: McpServer, suite: str, data: str, gold: str, by_key: boo
     results = (run.get("structuredContent") or {}).get("results") or []
     if not results or results[-1].get("failure") is not None:
         return None
-    return results[-1]
+    return graded_as(gold, results[-1])
+
+
+_CLUSTER_LABEL = re.compile(r"\bCLUSTER\b[^;{}]*?\bAS\s+(\w+)", re.IGNORECASE)
+_GROUPING_SETS = re.compile(r"\bGROUPING\s+SETS\b", re.IGNORECASE)
+
+
+def graded_as(gold: str, result: dict) -> dict:
+    """A gold result, marked with what its script leaves the answer free to vary.
+
+    A CLUSTER numbers its clusters 1, 2, ..., but any labels that group the same rows are
+    as right, so its label column ("partition") is compared as a partition. A GROUPING SETS
+    result ("grouping_sets") may be answered by one query per grouping, graded stacked.
+    """
+    label = _CLUSTER_LABEL.search(gold)
+    if label and label.group(1) in result["columns"]:
+        result = {**result, "partition": label.group(1)}
+    if _GROUPING_SETS.search(gold):
+        result = {**result, "grouping_sets": True}
+    return result
 
 
 def choose(items: list[dict], per_category: int, seed: int,
@@ -299,9 +318,13 @@ def compare(gold: dict, answer: dict) -> str:
     'missing_columns' (gold's rows, with only some of its columns) or 'mismatch'.
 
     A model column stands for a gold column when their values agree as multisets;
-    then the rows, projected onto that assignment, must agree as a multiset too.
+    then the rows, projected onto that assignment, must agree as a multiset too. A gold's
+    partition column is matched by how it groups the rows, not by its values: a model
+    column stands for it when its groups have the same sizes, and each label is then
+    compared as the rows its group holds.
     """
     gold_cols, answer_cols = _columns(gold), _columns(answer)
+    label = gold["columns"].index(gold["partition"]) if gold.get("partition") else None
     if 0 < len(answer_cols) < len(gold_cols) and compare(answer, gold) == "extra_columns":
         # The gold's rows, but fewer of its columns: the counterpart of extra_columns, a
         # reading of which columns to show rather than wrong rows.
@@ -311,19 +334,61 @@ def compare(gold: dict, answer: dict) -> str:
     if not gold_cols:
         return "match" if not answer_cols else "extra_columns"
     signature = [collections.Counter(map(repr, c)) for c in answer_cols]
-    candidates = [[j for j, s in enumerate(signature) if s == collections.Counter(map(repr, g))]
-                  for g in gold_cols]
-    want = collections.Counter(zip(*[tuple(map(repr, g)) for g in gold_cols]))
+    sizes = [_group_sizes(c) for c in answer_cols]
+    candidates = [[j for j in range(len(answer_cols))
+                   if (sizes[j] == _group_sizes(g) if i == label
+                       else signature[j] == collections.Counter(map(repr, g)))]
+                  for i, g in enumerate(gold_cols)]
+    want = _rows(gold_cols, label)
 
     def search(i: int, used: list[int]) -> bool:
         if i == len(gold_cols):
-            got = collections.Counter(zip(*[tuple(map(repr, answer_cols[j])) for j in used]))
-            return got == want
+            return _rows([answer_cols[j] for j in used], label) == want
         return any(search(i + 1, used + [j]) for j in candidates[i] if j not in used)
 
     if not search(0, []):
         return "mismatch"
     return "match" if len(answer_cols) == len(gold_cols) else "extra_columns"
+
+
+def _group_sizes(column: list) -> list[int]:
+    """How a column groups its rows: the sizes of its groups of equal values."""
+    return sorted(collections.Counter(map(repr, column)).values())
+
+
+def _rows(columns: list[list], label: int | None) -> collections.Counter:
+    """The rows of these columns as a multiset. The label column's value, when there is
+    one, is replaced by the rows its group holds, so two labellings of the same groups
+    give the same rows."""
+    rows = list(zip(*[tuple(map(repr, c)) for c in columns]))
+    if label is None:
+        return collections.Counter(rows)
+    groups = collections.defaultdict(list)
+    for row in rows:
+        groups[row[label]].append(row[:label] + row[label + 1:])
+    held = {key: tuple(sorted(members)) for key, members in groups.items()}
+    return collections.Counter(row[:label] + (held[row[label]],) + row[label + 1:] for row in rows)
+
+
+def stacked(gold: dict, results: list[dict]) -> dict | None:
+    """The results that each give some of a GROUPING SETS gold's columns, by name, as one
+    result in the gold's columns, NULL where a result lacks one: the answer to a question
+    asked "separately" as one query per grouping. None when fewer than two results do."""
+    wanted = {c.lower(): i for i, c in enumerate(gold["columns"])}
+    parts = [r for r in results if r.get("failure") is None and r.get("columns")
+             and all(c.lower() in wanted for c in r["columns"])]
+    if len(parts) < 2:
+        return None
+    rows = []
+    for part in parts:
+        at = [wanted[c.lower()] for c in part["columns"]]
+        for row in part.get("rows") or []:
+            whole = [None] * len(gold["columns"])
+            for i, value in zip(at, row):
+                whole[i] = value
+            rows.append(whole)
+    return {"columns": gold["columns"], "types": gold.get("types"), "rows": rows,
+            "stacked": len(parts)}
 
 
 GRADING_ROWS = 100_000
@@ -356,9 +421,13 @@ def best(gold: dict, results: list[dict]) -> tuple[str, dict | None]:
 
     A model asked for "all details" of something often adds a query per related table; the
     answer is the one that holds the rows asked for, wherever it comes in the script, so a
-    script is graded by its best query rather than its last.
+    script is graded by its best query rather than its last. A GROUPING SETS gold is also
+    compared with the script's results stacked, after each one alone.
     """
     graded = [(compare(gold, r), r) for r in results]
+    combined = stacked(gold, results) if gold.get("grouping_sets") else None
+    if combined is not None:
+        graded.append((compare(gold, combined), combined))
     for grade in ("match", "extra_columns", "missing_columns"):
         for g, r in graded:
             if g == grade:
