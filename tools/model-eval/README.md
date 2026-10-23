@@ -139,5 +139,9 @@ mix text and numbers, as one value column must hold them. A `ROLLUP` or `CUBE` l
 NULL in its key columns on a subtotal row, where a model often writes a label
 (`'Subtotal'`, `'Grand Total'`); in those columns, text that is none of the gold's values
 is read as that NULL, and an id that the label turned into text (`'301'`) as its number.
-Every other value, and every total, must still match. The grading tests run with
+Every other value, and every total, must still match. A `PIVOT` leaves NULL in a value
+column where no row had that combination, and an answer that sums or counts conditionally
+has 0 there; in a `PIVOT` gold's value columns the two are the same. Anywhere, a value
+at midnight UTC (`2026-10-21T00:00:00Z`, as `DOWNSAMPLE` or `DATE_TRUNC` buckets a day)
+is compared as its date (`2026-10-21`), so grouping by the day's date is as right. The grading tests run with
 `python3 -m unittest discover -s tools/model-eval`.
