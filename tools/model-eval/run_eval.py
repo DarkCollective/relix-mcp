@@ -250,6 +250,7 @@ def gold_result(server: McpServer, suite: str, data: str, gold: str, by_key: boo
 
 _CLUSTER_LABEL = re.compile(r"\bCLUSTER\b[^;{}]*?\bAS\s+(\w+)", re.IGNORECASE)
 _GROUPING_SETS = re.compile(r"\bGROUPING\s+SETS\b", re.IGNORECASE)
+_ROLLUP = re.compile(r"\b(?:ROLLUP|CUBE)\s*\(([^()]*)\)", re.IGNORECASE)
 
 
 def graded_as(gold: str, result: dict) -> dict:
@@ -259,7 +260,8 @@ def graded_as(gold: str, result: dict) -> dict:
     as right, so its label column ("partition") is compared as a partition. A GROUPING SETS
     result ("grouping_sets", its sets of columns) may be answered by one query per
     grouping, graded stacked, or by one result laid out long, graded against the gold
-    unpivoted.
+    unpivoted. A ROLLUP or CUBE leaves NULL in its key columns ("subtotals") on a
+    subtotal row, where an answer may write a label such as 'Subtotal' instead.
     """
     label = _CLUSTER_LABEL.search(gold)
     if label and label.group(1) in result["columns"]:
@@ -267,6 +269,10 @@ def graded_as(gold: str, result: dict) -> dict:
     sets = _GROUPING_SETS.search(gold)
     if sets:
         result = {**result, "grouping_sets": _sets(gold[sets.end():])}
+    keys = [k for m in _ROLLUP.finditer(gold) for k in re.findall(r"\w+", m.group(1))
+            if k in result["columns"]]
+    if keys:
+        result = {**result, "subtotals": keys}
     return result
 
 
@@ -346,10 +352,12 @@ def compare(gold: dict, answer: dict) -> str:
     then the rows, projected onto that assignment, must agree as a multiset too. A gold's
     partition column is matched by how it groups the rows, not by its values: a model
     column stands for it when its groups have the same sizes, and each label is then
-    compared as the rows its group holds.
+    compared as the rows its group holds. In a gold's subtotal column, an answer's text
+    that is none of the gold's values is taken as the NULL a subtotal row has there.
     """
     gold_cols, answer_cols = _columns(gold), _columns(answer)
     label = gold["columns"].index(gold["partition"]) if gold.get("partition") else None
+    subtotals = {gold["columns"].index(k) for k in gold.get("subtotals") or []}
     if 0 < len(answer_cols) < len(gold_cols) and compare(answer, gold) == "extra_columns":
         # The gold's rows, but fewer of its columns: the counterpart of extra_columns, a
         # reading of which columns to show rather than wrong rows.
@@ -358,22 +366,42 @@ def compare(gold: dict, answer: dict) -> str:
         return "mismatch"
     if not gold_cols:
         return "match" if not answer_cols else "extra_columns"
-    signature = [collections.Counter(map(repr, c)) for c in answer_cols]
+    relabelled = {(i, j): _unlabelled(answer, j, gold, gold_cols[i], i)
+                  for i in subtotals for j in range(len(answer_cols))}
+
+    def column(i: int, j: int) -> list:
+        return relabelled.get((i, j), answer_cols[j])
+
     sizes = [_group_sizes(c) for c in answer_cols]
     candidates = [[j for j in range(len(answer_cols))
                    if (sizes[j] == _group_sizes(g) if i == label
-                       else signature[j] == collections.Counter(map(repr, g)))]
+                       else collections.Counter(map(repr, column(i, j)))
+                       == collections.Counter(map(repr, g)))]
                   for i, g in enumerate(gold_cols)]
     want = _rows(gold_cols, label)
 
     def search(i: int, used: list[int]) -> bool:
         if i == len(gold_cols):
-            return _rows([answer_cols[j] for j in used], label) == want
+            return _rows([column(n, j) for n, j in enumerate(used)], label) == want
         return any(search(i + 1, used + [j]) for j in candidates[i] if j not in used)
 
     if not search(0, []):
         return "mismatch"
     return "match" if len(answer_cols) == len(gold_cols) else "extra_columns"
+
+
+def _unlabelled(answer: dict, j: int, gold: dict, gold_column: list, i: int) -> list:
+    """An answer's column j read as the gold's subtotal column i: each value as the gold's
+    type has it, so a sprint id written beside 'Subtotal' as text '301' is the number
+    301, and NULL for any text that is none of the gold's values, the label an answer
+    gives a subtotal row."""
+    kind = (gold.get("types") or [""] * len(gold["columns"]))[i]
+    known = set(map(repr, gold_column))
+    out = []
+    for row in answer.get("rows") or []:
+        value = _value(row[j], kind)
+        out.append(None if isinstance(row[j], str) and repr(value) not in known else value)
+    return out
 
 
 def _group_sizes(column: list) -> list[int]:

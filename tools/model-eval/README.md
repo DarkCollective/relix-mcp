@@ -135,5 +135,9 @@ transcript's `answer_result` gives how many). When each of its sets is one colum
 result is also compared with the gold laid out long: a label naming the grouping, the
 value it groups by, then the gold's other columns. The label is compared as a partition,
 so `'rating'`, `'by rating'` or `'r'` all do, and the values are text when the groupings
-mix text and numbers, as one value column must hold them. The grading tests run with
+mix text and numbers, as one value column must hold them. A `ROLLUP` or `CUBE` leaves
+NULL in its key columns on a subtotal row, where a model often writes a label
+(`'Subtotal'`, `'Grand Total'`); in those columns, text that is none of the gold's values
+is read as that NULL, and an id that the label turned into text (`'301'`) as its number.
+Every other value, and every total, must still match. The grading tests run with
 `python3 -m unittest discover -s tools/model-eval`.

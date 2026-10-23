@@ -8,6 +8,7 @@ import unittest
 import run_eval
 
 CLUSTER = "query { CLUSTER product_a, product_b AS bundle (also_bought) };"
+ROLLUP = "query { γ ROLLUP (sprint_id, priority), SUM(story_points) → total_points (issues) };"
 GROUPING_SETS = "query { γ GROUPING SETS ((rating), (category)), COUNT(*) → review_count (reviews) };"
 
 
@@ -117,6 +118,50 @@ class GroupingSetsAnsweredSeparatelyAreStacked(unittest.TestCase):
         gold = {k: v for k, v in self.gold.items() if k != "grouping_sets"}
         grade, _ = run_eval.best(gold, [self.by_rating, self.by_category])
         self.assertEqual(grade, "mismatch")
+
+
+class SubtotalRowsMayBeLabelled(unittest.TestCase):
+
+    gold = run_eval.graded_as(ROLLUP, result(
+        ["sprint_id", "priority", "total_points"], ["NUMBER", "STRING", "NUMBER"],
+        [[301, "high", 18], [301, "low", 1], [302, "high", 13],
+         [301, None, 19], [302, None, 13], [None, None, 32]]))
+
+    def test_the_gold_names_its_subtotal_columns(self):
+        self.assertEqual(self.gold["subtotals"], ["sprint_id", "priority"])
+
+    def test_labels_in_place_of_null_match(self):
+        answer = result(["sprint_id", "priority", "total_points"], ["NUMBER", "STRING", "NUMBER"],
+                        [[301, "high", 18], [301, "low", 1], [302, "high", 13],
+                         [301, "Subtotal", 19], [302, "Subtotal", 13], [None, "Grand Total", 32]])
+        self.assertEqual(run_eval.compare(self.gold, answer), "match")
+
+    def test_a_label_in_a_number_column_matches(self):
+        # 'Total' in the sprint column makes it text, its ids too.
+        answer = result(["sprint", "priority", "points"], ["STRING", "STRING", "NUMBER"],
+                        [["301", "high", 18], ["301", "low", 1], ["302", "high", 13],
+                         ["301", None, 19], ["302", None, 13], ["Total", None, 32]])
+        self.assertEqual(run_eval.compare(self.gold, answer), "match")
+
+    def test_a_labelled_subtotal_with_a_wrong_total_does_not_match(self):
+        answer = result(["sprint_id", "priority", "total_points"], ["NUMBER", "STRING", "NUMBER"],
+                        [[301, "high", 18], [301, "low", 1], [302, "high", 13],
+                         [301, "Subtotal", 20], [302, "Subtotal", 13], [None, "Grand Total", 32]])
+        self.assertEqual(run_eval.compare(self.gold, answer), "mismatch")
+
+    def test_a_wrong_value_in_a_detail_row_does_not_match(self):
+        # 'medium' is none of the gold's priorities, but it stands on a detail row.
+        answer = result(["sprint_id", "priority", "total_points"], ["NUMBER", "STRING", "NUMBER"],
+                        [[301, "high", 18], [301, "medium", 1], [302, "high", 13],
+                         [301, None, 19], [302, None, 13], [None, None, 32]])
+        self.assertEqual(run_eval.compare(self.gold, answer), "mismatch")
+
+    def test_labels_are_not_read_as_null_without_rollup(self):
+        gold = {k: v for k, v in self.gold.items() if k != "subtotals"}
+        answer = result(["sprint_id", "priority", "total_points"], ["NUMBER", "STRING", "NUMBER"],
+                        [[301, "high", 18], [301, "low", 1], [302, "high", 13],
+                         [301, "Subtotal", 19], [302, "Subtotal", 13], [None, "Grand Total", 32]])
+        self.assertEqual(run_eval.compare(gold, answer), "mismatch")
 
 
 if __name__ == "__main__":
