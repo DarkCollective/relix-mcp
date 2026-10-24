@@ -217,5 +217,59 @@ class ADayIsItsMidnight(unittest.TestCase):
         self.assertEqual(run_eval.compare(gold, result(["at"], ["DATE"], [["2026-10-21"]])), "mismatch")
 
 
+class TemperatureRisesForAStuckModel(unittest.TestCase):
+
+    ALIAS = "script:6:29: error: Syntax error in RA expression: Relix has no table aliases: write RENAME o (orders)"
+
+    def escalation(self):
+        return run_eval.Escalation(0.2, [0.8, 1.0], 3)
+
+    def fail(self, e, error=None, line=6):
+        return e.observe("relix_validate", {"script": "…"}, (error or self.ALIAS).replace("script:6:", f"script:{line}:"), "Invalid")
+
+    def test_three_identical_errors_raise_it(self):
+        e = self.escalation()
+        self.assertIsNone(self.fail(e)); self.assertIsNone(self.fail(e))
+        self.assertTrue(self.fail(e).startswith("up to 0.8"))
+        self.assertEqual(e.temperature, 0.8)
+
+    def test_the_same_error_on_another_line_counts_as_the_same(self):
+        e = self.escalation()
+        self.fail(e, line=3); self.fail(e, line=9); self.fail(e, line=12)
+        self.assertEqual(e.temperature, 0.8)
+
+    def test_three_more_raise_it_again_and_no_further(self):
+        e = self.escalation()
+        for _ in range(9):
+            self.fail(e)
+        self.assertEqual(e.temperature, 1.0)
+
+    def test_different_errors_do_not_raise_it(self):
+        e = self.escalation()
+        self.fail(e); self.fail(e, "script:1:1: error: Expected end of input; found ','"); self.fail(e)
+        self.assertEqual(e.temperature, 0.2)
+
+    def test_a_script_that_goes_through_drops_it_back(self):
+        e = self.escalation()
+        for _ in range(3):
+            self.fail(e)
+        self.assertTrue(e.observe("relix_validate", {"script": "…"}, None, "Valid.").startswith("back to 0.2"))
+        self.assertEqual(e.temperature, 0.2)
+        self.fail(e); self.fail(e)
+        self.assertEqual(e.temperature, 0.2)
+
+    def test_a_lookup_asked_again_and_again_raises_it(self):
+        e = self.escalation()
+        for topic in ("RECORD", "record", "Record "):
+            e.observe("relix_learn", {"topic": topic}, None, "No page is called 'RECORD'.")
+        self.assertEqual(e.temperature, 0.8)
+
+    def test_a_lookup_that_finds_a_page_is_not_a_miss(self):
+        e = self.escalation()
+        for _ in range(3):
+            e.observe("relix_learn", {"topic": "IIf"}, None, "# Name: IIf")
+        self.assertEqual(e.temperature, 0.2)
+
+
 if __name__ == "__main__":
     unittest.main()

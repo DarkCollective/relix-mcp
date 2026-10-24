@@ -68,6 +68,15 @@ LM Studio's default (8,192 for gpt-oss-20b) and loses the start of the conversat
 One worker is the default: two parallel requests at that context crashed gpt-oss-20b on a
 48 GB Mac.
 
+`--escalate 0.8,1.0` raises the temperature for a model that is stuck. After
+`--escalate-after` (3) identical misses in a row, it moves to the next temperature: a
+miss is the same error, ignoring its line and column, or the same lookup finding no page.
+A script that validates or runs drops it back to the run's own temperature. No ordinary
+client does this, so it is off by default. Each question records `escalations` (the call,
+the temperature and why) and `temperature_at_submit`, and the summary counts the
+questions whose temperature rose and how they went. That way a pass can be traced to
+the rise rather than credited to the run.
+
 Each run writes `runs/<timestamp>/`:
 
 - `summary.md`: pass rate, results by category, failed tool calls grouped by
