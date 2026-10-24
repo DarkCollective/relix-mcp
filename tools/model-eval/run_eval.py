@@ -617,6 +617,49 @@ def failed(name: str, result: dict) -> str | None:
     return None
 
 
+class Escalation:
+    """When to raise the temperature for a model that is stuck, with --escalate.
+
+    A model that has gone wrong tends to make the same call again: one error eight times,
+    or one lookup that finds no page asked twenty times. At a low temperature it is likely
+    to write the same thing next, so after `after` identical misses in a row the next
+    temperature in `steps` is used, and the one after it if the misses go on. A miss is a
+    call that fails, compared by its error without the line and column, or a lookup that
+    finds no page, compared by its topic. A script that validates or runs is progress, and
+    the temperature drops back to the run's own for the careful work that follows.
+    """
+
+    def __init__(self, base: float, steps: list[float], after: int):
+        self.base, self.steps, self.after = base, steps, after
+        self.temperature = base
+        self.step = 0
+        self.last = None
+        self.repeats = 0
+
+    def observe(self, name: str, arguments: dict | None, problem: str | None,
+                text: str) -> str | None:
+        """Takes in one call; returns why the temperature changed, or None."""
+        if problem:
+            miss = re.sub(r"^script:\d+:\d+: ", "", problem)[:80]
+        elif name == "relix_learn" and text.startswith("No page is called"):
+            miss = "no page for " + str((arguments or {}).get("topic", "")).strip().lower()
+        else:
+            miss = None
+        if miss is None:
+            if name in ("relix_validate", "relix_run", "relix_explain") and self.temperature != self.base:
+                self.temperature, self.step, self.last, self.repeats = self.base, 0, None, 0
+                return f"back to {self.base}: a script went through"
+            return None
+        self.repeats = self.repeats + 1 if miss == self.last else 1
+        self.last = miss
+        if self.repeats >= self.after and self.step < len(self.steps):
+            self.temperature = self.steps[self.step]
+            self.step += 1
+            self.repeats = 0
+            return f"up to {self.temperature}: {self.after} times in a row, {miss}"
+        return None
+
+
 def described(key: str, tables: list[dict]) -> str:
     """What the model is told of data loaded for it: the key, and each table's columns."""
     lines = [f'The data is loaded under the data key {key}. Pass "data": "{key}" with every '
@@ -716,12 +759,16 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args) -> dict:
     events, calls, failures, topics, runs = [], 0, [], [], []
     asks, recovered, retries, reminders, garbled = [], 0, 0, 0, 0
     submission, final_text, stop = None, "", "turns"
+    escalation = Escalation(SAMPLING["temperature"], args.escalate, args.escalate_after) \
+        if args.escalate else None
+    escalations = []
     started = time.time()
     for _ in range(args.max_turns):
         # Until it submits, every turn must be a call (--tool-choice required), so the only way
         # to finish is relix_submit; after it, one turn with no calls for the closing reply.
         payload = {"model": args.model, "messages": messages, "tools": tools,
-                   "tool_choice": "none" if submission is not None else args.tool_choice, **SAMPLING}
+                   "tool_choice": "none" if submission is not None else args.tool_choice, **SAMPLING,
+                   **({"temperature": escalation.temperature} if escalation else {})}
         try:
             reply = chat(args.api, payload, args.timeout)
         except urllib.error.HTTPError as e:
@@ -803,7 +850,8 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args) -> dict:
             results = structured.get("results") or []
             ran = [r for r in results if r.get("failure") is None]
             if name == "relix_submit" and structured.get("submitted"):
-                submission = {"script": structured.get("script"), "results": ran}
+                submission = {"script": structured.get("script"), "results": ran,
+                              "temperature": payload["temperature"]}
             finished = (name == "relix_run" and structured.get("valid") and not structured.get("stopped")
                         and results and results[-1].get("failure") is None)
             if finished:
@@ -812,6 +860,12 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args) -> dict:
                            **({"rows": results[-1]} if finished else {})})
             messages.append({"role": "tool", "tool_call_id": call.get("id", ""),
                              "content": text_of(result)})
+            if escalation:
+                changed = escalation.observe(name, arguments, problem, text_of(result))
+                if changed:
+                    escalations.append({"call": calls, "temperature": escalation.temperature,
+                                        "why": changed})
+                    events.append({"harness": f"temperature {changed}"})
         if asks and submission is None and args.on_ask == "stop":
             stop = "asked"
             break
@@ -820,7 +874,7 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args) -> dict:
             break
     return {"events": events, "calls": calls, "failures": failures, "learn": topics, "runs": runs,
             "asks": asks, "recovered": recovered, "retries": retries, "reminders": reminders,
-            "garbled": garbled,
+            "garbled": garbled, "escalations": escalations,
             "submission": submission, "final_text": final_text, "stop": stop,
             "seconds": round(time.time() - started, 1)}
 
@@ -859,6 +913,13 @@ def main(argv=None) -> int:
     parser.add_argument("--api", default=DEFAULT_API)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--temperature", type=float, default=None, help="overrides the preset's 0.8")
+    parser.add_argument("--escalate", type=lambda s: [float(t) for t in s.split(",")], default=None,
+                        metavar="T1,T2",
+                        help="raise the temperature to T1, then T2, for a model that repeats one "
+                             "miss --escalate-after times in a row, and drop back once a script goes "
+                             "through (default: off; recorded per question as 'escalations')")
+    parser.add_argument("--escalate-after", type=int, default=3,
+                        help="identical misses in a row before --escalate raises the temperature (default 3)")
     parser.add_argument("--workers", type=int, default=1,
                         help="parallel requests; 2 crashed gpt-oss-20b with a 65,536-token context "
                              "on a 48 GB Mac, and 4 at a smaller one")
@@ -984,6 +1045,8 @@ def main(argv=None) -> int:
                       recovered_calls=outcome["recovered"], dropped_call_retries=outcome["retries"],
                       garbled_call_retries=outcome["garbled"],
                       submitted_after_reminder=bool(outcome["reminders"] and outcome["submission"]),
+                      escalations=outcome["escalations"],
+                      temperature_at_submit=(outcome["submission"] or {}).get("temperature"),
                       gold_columns=(gold or {}).get("columns"),
                       answer_columns=(answer or {}).get("columns"))
         with open(os.path.join(out, "transcripts", item["id"].replace(":", "-") + ".json"), "w") as f:
@@ -1007,6 +1070,22 @@ def main(argv=None) -> int:
         f.write(summary(records, args, grader.server_info))
     print(os.path.join(out, "summary.md"))
     return 0
+
+
+def escalated(records: list[dict]) -> list[str]:
+    """The summary's lines on --escalate: how many questions had the temperature raised,
+    how they were graded, and how many of the right ones were submitted while it was up.
+    None when no question had it raised."""
+    raised = [r for r in records if any(e["temperature"] > SAMPLING["temperature"]
+                                        for e in r.get("escalations") or [])]
+    if not raised:
+        return []
+    right = [r for r in raised if r["grade"] in RIGHT_ROWS]
+    hot = [r for r in right if (r.get("temperature_at_submit") or 0) > SAMPLING["temperature"]]
+    grades = collections.Counter(r["grade"] for r in raised)
+    return [f"Temperature raised (--escalate) in {len(raised)} questions: "
+            + ", ".join(f"{n} {g}" for g, n in grades.most_common())
+            + f". Right rows in {len(right)} of them, {len(hot)} submitted while it was raised.", ""]
 
 
 def summary(records: list[dict], args, server_info: dict) -> str:
@@ -1045,6 +1124,7 @@ def summary(records: list[dict], args, server_info: dict) -> str:
                   f"{sum(1 for r in records if r.get('submitted_after_reminder'))}. "
                   f"Questions where the model asked the user: "
                   f"{sum(1 for r in records if r.get('asks'))}.", "",
+                  *escalated(records),
               "## By category", "",
               "Right rows: the gold's rows in any columns (match, extra_columns or missing_columns), "
               "the nearest to relix's agentic grade, which also tolerates extra columns.", "",
