@@ -77,6 +77,14 @@ the temperature and why) and `temperature_at_submit`, and the summary counts the
 questions whose temperature rose and how they went. That way a pass can be traced to
 the rise rather than credited to the run.
 
+`--retry-after 16` gives the first attempt 16 calls. If it ends without submitting (out
+of calls, or stopped), a fresh conversation starts from the question with the rest of
+`--max-calls`. The failed attempt, and the pages it read, are no longer in front of the
+model. A wrong submission isn't retried, since a client can't know it is wrong, and
+neither is an API error or a question the model put to the user. Each question records
+`attempts` and `first_attempt_stop`, and its transcript marks where the second attempt
+starts.
+
 Each run writes `runs/<timestamp>/`:
 
 - `summary.md`: pass rate, results by category, failed tool calls grouped by
