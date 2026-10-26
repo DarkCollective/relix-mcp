@@ -271,5 +271,52 @@ class TemperatureRisesForAStuckModel(unittest.TestCase):
         self.assertEqual(e.temperature, 0.2)
 
 
+class AStuckAttemptGetsAFreshOne(unittest.TestCase):
+
+    def outcome(self, calls, stop, submission=None, failed_at=()):
+        return {"events": [{"tool": "relix_validate"}] * calls, "calls": calls,
+                "failures": [{"call": c, "tool": "relix_validate", "error": "e"} for c in failed_at],
+                "learn": [], "runs": [], "asks": [], "escalations": [], "recovered": 0, "retries": 0,
+                "reminders": 0, "garbled": 0, "seconds": 1.0, "submission": submission,
+                "final_text": "", "stop": stop}
+
+    def attempt(self, outcomes, retry_after=16, max_calls=25):
+        budgets = []
+
+        def fake_ask(item, data, prompt, server, args, budget=None):
+            budgets.append(budget)
+            return outcomes.pop(0)
+        real, run_eval.ask = run_eval.ask, fake_ask
+        try:
+            args = type("Args", (), {"retry_after": retry_after, "max_calls": max_calls})()
+            return run_eval.attempted({}, "", "", None, args), budgets
+        finally:
+            run_eval.ask = real
+
+    def test_a_first_attempt_that_runs_out_is_followed_by_a_fresh_one(self):
+        answer = {"script": "query R;", "results": []}
+        out, budgets = self.attempt([self.outcome(16, "call_limit", failed_at=(3, 4)),
+                                     self.outcome(4, "answered", answer, failed_at=(2,))])
+        self.assertEqual(budgets, [16, 9])
+        self.assertEqual(out["attempts"], 2)
+        self.assertEqual(out["calls"], 20)
+        self.assertEqual(out["submission"], answer)
+        self.assertEqual([f["call"] for f in out["failures"]], [3, 4, 18])
+        self.assertIn({"harness": run_eval.SECOND_ATTEMPT}, out["events"])
+        self.assertEqual(out["first_stop"], "call_limit")
+
+    def test_a_submitted_answer_is_not_retried_even_if_wrong(self):
+        out, budgets = self.attempt([self.outcome(5, "answered", {"script": "x", "results": []})])
+        self.assertEqual((out["attempts"], budgets), (1, [16]))
+
+    def test_an_api_error_is_not_retried(self):
+        out, budgets = self.attempt([self.outcome(3, "api_error: timed out")])
+        self.assertEqual((out["attempts"], budgets), (1, [16]))
+
+    def test_without_the_flag_one_attempt_has_the_whole_budget(self):
+        out, budgets = self.attempt([self.outcome(25, "call_limit")], retry_after=None)
+        self.assertEqual((out["attempts"], budgets), (1, [None]))
+
+
 if __name__ == "__main__":
     unittest.main()

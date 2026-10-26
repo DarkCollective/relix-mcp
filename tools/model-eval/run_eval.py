@@ -746,7 +746,7 @@ def leaked_call(content: str) -> tuple[str, dict] | None:
     return None
 
 
-def ask(item: dict, data: str, prompt: str, server: McpServer, args) -> dict:
+def ask(item: dict, data: str, prompt: str, server: McpServer, args, budget: int | None = None) -> dict:
     offered = [t for t in server.tools if args.data != "key" or t["name"] not in CLIENT_ONLY]
     tools = openai_tools(offered) + [ASK_USER]
     callable_names = {t["name"] for t in offered} | {"ask_user"}
@@ -869,7 +869,7 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args) -> dict:
         if asks and submission is None and args.on_ask == "stop":
             stop = "asked"
             break
-        if calls >= args.max_calls and submission is None:
+        if calls >= (budget or args.max_calls) and submission is None:
             stop = "call_limit"
             break
     return {"events": events, "calls": calls, "failures": failures, "learn": topics, "runs": runs,
@@ -877,6 +877,45 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args) -> dict:
             "garbled": garbled, "escalations": escalations,
             "submission": submission, "final_text": final_text, "stop": stop,
             "seconds": round(time.time() - started, 1)}
+
+
+# An attempt that ends in one of these gave up or ran out, so a fresh one may do better. A
+# wrong submission is not retried (a client can't know it is wrong), nor an API error or a
+# question the model put to the user.
+RETRYABLE = ("call_limit", "stopped_without_submit", "dropped_tool_call", "turns")
+SECOND_ATTEMPT = "Second attempt: a fresh conversation, with the calls the first left over."
+
+
+def attempted(item: dict, data: str, prompt: str, server: McpServer, args) -> dict:
+    """ask(), with --retry-after: an attempt that ends without submitting after that many
+    calls is followed by a fresh conversation with the rest of --max-calls.
+
+    A model stuck on one mistake tends to make it again for as long as the mistake is in
+    front of it. A new conversation drops the failed attempt, and the reference pages it
+    read, and starts again from the question. The two are returned as one outcome: calls
+    and failures counted across both, events joined with a marker, and the second's
+    submission as the answer.
+    """
+    if not args.retry_after:
+        return {**ask(item, data, prompt, server, args), "attempts": 1}
+    first = ask(item, data, prompt, server, args, budget=args.retry_after)
+    left = args.max_calls - first["calls"]
+    if first["submission"] is not None or first["stop"] not in RETRYABLE or left < 1:
+        return {**first, "attempts": 1}
+    second = ask(item, data, prompt, server, args, budget=left)
+    shift = first["calls"]
+    moved = lambda entries: [{**e, "call": e["call"] + shift} for e in entries]
+    return {**second,
+            "events": first["events"] + [{"harness": SECOND_ATTEMPT}] + second["events"],
+            "calls": shift + second["calls"],
+            "failures": first["failures"] + moved(second["failures"]),
+            "learn": first["learn"] + second["learn"],
+            "runs": first["runs"] + moved(second["runs"]),
+            "asks": first["asks"] + moved(second["asks"]),
+            "escalations": first["escalations"] + moved(second["escalations"]),
+            **{k: first[k] + second[k] for k in ("recovered", "retries", "reminders", "garbled")},
+            "seconds": round(first["seconds"] + second["seconds"], 1),
+            "attempts": 2, "first_stop": first["stop"], "first_calls": shift}
 
 
 # --------------------------------------------------------------------------- #
@@ -918,6 +957,10 @@ def main(argv=None) -> int:
                         help="raise the temperature to T1, then T2, for a model that repeats one "
                              "miss --escalate-after times in a row, and drop back once a script goes "
                              "through (default: off; recorded per question as 'escalations')")
+    parser.add_argument("--retry-after", type=int, default=None, metavar="N",
+                        help="give the first attempt N calls; if it ends without submitting, start a "
+                             "fresh conversation with the rest of --max-calls (default: off; recorded "
+                             "per question as 'attempts')")
     parser.add_argument("--escalate-after", type=int, default=3,
                         help="identical misses in a row before --escalate raises the temperature (default 3)")
     parser.add_argument("--workers", type=int, default=1,
@@ -993,7 +1036,7 @@ def main(argv=None) -> int:
         with free_lock:
             server = free.pop()
         try:
-            outcome = ask(item, data[item["suite"]], prompt, server, args)
+            outcome = attempted(item, data[item["suite"]], prompt, server, args)
         finally:
             with free_lock:
                 free.append(server)
@@ -1046,6 +1089,7 @@ def main(argv=None) -> int:
                       garbled_call_retries=outcome["garbled"],
                       submitted_after_reminder=bool(outcome["reminders"] and outcome["submission"]),
                       escalations=outcome["escalations"],
+                      attempts=outcome["attempts"], first_attempt_stop=outcome.get("first_stop"),
                       temperature_at_submit=(outcome["submission"] or {}).get("temperature"),
                       gold_columns=(gold or {}).get("columns"),
                       answer_columns=(answer or {}).get("columns"))
@@ -1088,6 +1132,19 @@ def escalated(records: list[dict]) -> list[str]:
             + f". Right rows in {len(right)} of them, {len(hot)} submitted while it was raised.", ""]
 
 
+def retried(records: list[dict]) -> list[str]:
+    """The summary's line on --retry-after: how many questions took a second attempt, and
+    how those went. None when none did."""
+    second = [r for r in records if r.get("attempts") == 2]
+    if not second:
+        return []
+    grades = collections.Counter(r["grade"] for r in second)
+    right = sum(grades[g] for g in RIGHT_ROWS)
+    return [f"Second attempts (--retry-after): {len(second)} questions: "
+            + ", ".join(f"{n} {g}" for g, n in grades.most_common())
+            + f". Right rows in {right} of them.", ""]
+
+
 def summary(records: list[dict], args, server_info: dict) -> str:
     total = len(records)
     grades = collections.Counter(r["grade"] for r in records)
@@ -1124,7 +1181,7 @@ def summary(records: list[dict], args, server_info: dict) -> str:
                   f"{sum(1 for r in records if r.get('submitted_after_reminder'))}. "
                   f"Questions where the model asked the user: "
                   f"{sum(1 for r in records if r.get('asks'))}.", "",
-                  *escalated(records),
+                  *escalated(records), *retried(records),
               "## By category", "",
               "Right rows: the gold's rows in any columns (match, extra_columns or missing_columns), "
               "the nearest to relix's agentic grade, which also tolerates extra columns.", "",
