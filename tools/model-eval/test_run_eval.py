@@ -271,12 +271,51 @@ class TemperatureRisesForAStuckModel(unittest.TestCase):
         self.assertEqual(e.temperature, 0.2)
 
 
+class AModelRepeatingAMissIsTold(unittest.TestCase):
+
+    ALIAS = TemperatureRisesForAStuckModel.ALIAS
+
+    def fail(self, n, error=None, line=6):
+        return n.observe("relix_validate", {"script": "…"},
+                         (error or self.ALIAS).replace("script:6:", f"script:{line}:"), "Invalid")
+
+    def test_the_third_identical_error_is_answered_with_a_nudge_quoting_it(self):
+        n = run_eval.Nudge(3)
+        self.assertIsNone(self.fail(n, line=2)); self.assertIsNone(self.fail(n, line=4))
+        told = self.fail(n, line=8)
+        self.assertIn("3 times in a row", told)
+        self.assertIn("write RENAME o (orders)", told)
+
+    def test_it_is_told_again_after_as_many_more(self):
+        n = run_eval.Nudge(3)
+        told = [self.fail(n) for _ in range(6)]
+        self.assertEqual([t is not None for t in told], [False, False, True, False, False, True])
+
+    def test_a_script_that_goes_through_starts_the_count_again(self):
+        n = run_eval.Nudge(3)
+        self.fail(n); self.fail(n)
+        n.observe("relix_run", {"script": "…"}, None, "| a |")
+        self.assertIsNone(self.fail(n)); self.assertIsNone(self.fail(n))
+
+    def test_different_errors_are_not_a_repeat(self):
+        n = run_eval.Nudge(3)
+        self.fail(n); self.fail(n, "script:1:1: error: Expected end of input; found ','")
+        self.assertIsNone(self.fail(n))
+
+    def test_a_lookup_that_keeps_finding_no_page_is_told_to_try_the_contents(self):
+        n = run_eval.Nudge(2)
+        n.observe("relix_learn", {"topic": "RECORD"}, None, "No page is called 'RECORD'.")
+        told = n.observe("relix_learn", {"topic": "record"}, None, "No page is called 'record'.")
+        self.assertIn("no page for 'record'", told)
+        self.assertIn("no topic", told)
+
+
 class AStuckAttemptGetsAFreshOne(unittest.TestCase):
 
     def outcome(self, calls, stop, submission=None, failed_at=()):
         return {"events": [{"tool": "relix_validate"}] * calls, "calls": calls,
                 "failures": [{"call": c, "tool": "relix_validate", "error": "e"} for c in failed_at],
-                "learn": [], "runs": [], "asks": [], "escalations": [], "recovered": 0, "retries": 0,
+                "learn": [], "runs": [], "asks": [], "escalations": [], "nudges": [], "recovered": 0, "retries": 0,
                 "reminders": 0, "garbled": 0, "seconds": 1.0, "submission": submission,
                 "final_text": "", "stop": stop}
 
