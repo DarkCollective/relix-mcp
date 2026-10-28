@@ -68,6 +68,14 @@ _EXPRESSION = re.compile(r"RELIX EXPRESSION:\s*(.*?)\s*(?:EXPECTED OUTPUT:|\Z)",
 # MCP over stdio
 # --------------------------------------------------------------------------- #
 
+class ServerError(RuntimeError):
+    """A JSON-RPC error reply: the server is still running, but could not handle the request."""
+
+    def __init__(self, method: str, error: dict):
+        super().__init__(f"{method}: {error}")
+        self.message = str(error.get("message", error))
+
+
 class McpServer:
     """One relix-mcp process, spoken to with newline-delimited JSON-RPC."""
 
@@ -102,7 +110,7 @@ class McpServer:
                 message = json.loads(line)
                 if message.get("id") == ident:
                     if "error" in message:
-                        raise RuntimeError(f"{method}: {message['error']}")
+                        raise ServerError(method, message["error"])
                     return message["result"]
         raise RuntimeError(f"{method}: the server closed its output")
 
@@ -815,7 +823,7 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args, budget: int
         if args.escalate else None
     escalations = []
     nudge = Nudge(args.nudge_after) if args.nudge_after else None
-    nudges = []
+    nudges, server_errors = [], []
     started = time.time()
     for _ in range(args.max_turns):
         # Until it submits, every turn must be a call (--tool-choice required), so the only way
@@ -894,7 +902,15 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args, budget: int
                 asks.append({"call": calls, "question": str(arguments.get("question", ""))})
                 result = {"content": [{"type": "text", "text": NO_ONE_TO_ASK}]}
             else:
-                result = server.call(name, arguments)
+                try:
+                    result = server.call(name, arguments)
+                except ServerError as e:
+                    # An internal error in the server or engine, not an answer to the script: it
+                    # is kept apart, with the call's arguments in the transcript to reproduce it,
+                    # and the model is told the call failed, as a client would tell it.
+                    server_errors.append({"call": calls, "tool": name, "error": e.message})
+                    result = {"content": [{"type": "text", "text": f"Failed: the server could not "
+                                           f"handle this call: {e.message}"}], "isError": True}
             if name == "relix_learn" and arguments:
                 topics.append(arguments.get("topic", "(contents)"))
             problem = failed(name, result) if arguments is not None else "arguments were not valid JSON"
@@ -935,6 +951,7 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args, budget: int
     return {"events": events, "calls": calls, "failures": failures, "learn": topics, "runs": runs,
             "asks": asks, "recovered": recovered, "retries": retries, "reminders": reminders,
             "garbled": garbled, "escalations": escalations, "nudges": nudges,
+            "server_errors": server_errors,
             "submission": submission, "final_text": final_text, "stop": stop,
             "seconds": round(time.time() - started, 1)}
 
@@ -974,6 +991,7 @@ def attempted(item: dict, data: str, prompt: str, server: McpServer, args) -> di
             "asks": first["asks"] + moved(second["asks"]),
             "escalations": first["escalations"] + moved(second["escalations"]),
             "nudges": first["nudges"] + moved(second["nudges"]),
+            "server_errors": first["server_errors"] + moved(second["server_errors"]),
             **{k: first[k] + second[k] for k in ("recovered", "retries", "reminders", "garbled")},
             "seconds": round(first["seconds"] + second["seconds"], 1),
             "attempts": 2, "first_stop": first["stop"], "first_calls": shift}
@@ -1154,6 +1172,7 @@ def main(argv=None) -> int:
                       garbled_call_retries=outcome["garbled"],
                       submitted_after_reminder=bool(outcome["reminders"] and outcome["submission"]),
                       escalations=outcome["escalations"], nudges=outcome["nudges"],
+                      server_errors=outcome["server_errors"],
                       attempts=outcome["attempts"], first_attempt_stop=outcome.get("first_stop"),
                       temperature_at_submit=(outcome["submission"] or {}).get("temperature"),
                       gold_columns=(gold or {}).get("columns"),
@@ -1259,7 +1278,9 @@ def summary(records: list[dict], args, server_info: dict) -> str:
                   f"Submitted after a reminder: "
                   f"{sum(1 for r in records if r.get('submitted_after_reminder'))}. "
                   f"Questions where the model asked the user: "
-                  f"{sum(1 for r in records if r.get('asks'))}.", "",
+                  f"{sum(1 for r in records if r.get('asks'))}. "
+                  f"Calls the server failed with an internal error: "
+                  f"{sum(len(r.get('server_errors') or []) for r in records)}.", "",
                   *escalated(records), *nudged(records), *retried(records),
               "## By category", "",
               "Right rows: the gold's rows in any columns (match, extra_columns or missing_columns), "
