@@ -94,6 +94,11 @@ neither is an API error or a question the model put to the user. Each question r
 `attempts` and `first_attempt_stop`, and its transcript marks where the second attempt
 starts.
 
+A call the server can't handle at all (a JSON-RPC error, such as an engine exception) doesn't
+end the run: the model is told the call failed, as a client would tell it, and the question goes
+on. Each question records them in `server_errors`, the transcript keeps the call's arguments to
+reproduce it with, and the summary counts them.
+
 Each run writes `runs/<timestamp>/`:
 
 - `summary.md`: pass rate, results by category, failed tool calls grouped by
