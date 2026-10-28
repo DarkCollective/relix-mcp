@@ -310,12 +310,38 @@ class AModelRepeatingAMissIsTold(unittest.TestCase):
         self.assertIn("no topic", told)
 
 
+class AnInternalServerErrorIsAFailedCall(unittest.TestCase):
+
+    class Server:
+        tools = [{"name": "relix_run", "description": "", "inputSchema": {"type": "object"}}]
+
+        def call(self, name, arguments):
+            raise run_eval.ServerError("tools/call", {"code": -32603, "message": "No schema annotation"})
+
+    def test_the_question_goes_on_and_the_error_is_kept_with_its_call(self):
+        replies = [{"tool_calls": [{"id": "1", "type": "function", "function": {
+                       "name": "relix_run", "arguments": '{"script": "query R;"}'}}]},
+                   {"content": ""}, {"content": ""}, {"content": ""}]
+        real, run_eval.chat = run_eval.chat, lambda api, payload, timeout: {
+            "choices": [{"message": replies.pop(0)}]}
+        try:
+            args = type("Args", (), {"data": "inline", "model": "m", "tool_choice": "auto", "max_turns": 4,
+                                     "max_calls": 25, "escalate": None, "nudge_after": None,
+                                     "reminders": 0, "on_ask": "continue", "api": "", "timeout": 1})()
+            out = run_eval.ask({"instruction": "q", "suite": "s"}, "R := [];", "p", self.Server(), args)
+        finally:
+            run_eval.chat = real
+        self.assertEqual(out["server_errors"], [{"call": 1, "tool": "relix_run", "error": "No schema annotation"}])
+        self.assertEqual(out["failures"][0]["call"], 1)
+        self.assertEqual(out["events"][1]["arguments"], {"script": "query R;"})
+
+
 class AStuckAttemptGetsAFreshOne(unittest.TestCase):
 
     def outcome(self, calls, stop, submission=None, failed_at=()):
         return {"events": [{"tool": "relix_validate"}] * calls, "calls": calls,
                 "failures": [{"call": c, "tool": "relix_validate", "error": "e"} for c in failed_at],
-                "learn": [], "runs": [], "asks": [], "escalations": [], "nudges": [], "recovered": 0, "retries": 0,
+                "learn": [], "runs": [], "asks": [], "escalations": [], "nudges": [], "server_errors": [], "recovered": 0, "retries": 0,
                 "reminders": 0, "garbled": 0, "seconds": 1.0, "submission": submission,
                 "final_text": "", "stop": stop}
 
