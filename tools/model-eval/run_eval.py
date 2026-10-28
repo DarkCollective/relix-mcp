@@ -617,16 +617,32 @@ def failed(name: str, result: dict) -> str | None:
     return None
 
 
+def missed(name: str, arguments: dict | None, problem: str | None, text: str) -> str | None:
+    """What a call missed, to compare with the calls before it, or None for a call that didn't.
+
+    A model that has gone wrong tends to make the same call again: one error eight times, or
+    one lookup that finds no page asked twenty times. A miss is a call that fails, compared by
+    its error without the line and column, or a lookup that finds no page, compared by its topic.
+    """
+    if problem:
+        return re.sub(r"^script:\d+:\d+: ", "", problem)[:80]
+    if name == "relix_learn" and text.startswith("No page is called"):
+        return "no page for " + str((arguments or {}).get("topic", "")).strip().lower()
+    return None
+
+
+# A script that validates or runs is progress, and ends a run of misses.
+PROGRESS = ("relix_validate", "relix_run", "relix_explain")
+
+
 class Escalation:
     """When to raise the temperature for a model that is stuck, with --escalate.
 
-    A model that has gone wrong tends to make the same call again: one error eight times,
-    or one lookup that finds no page asked twenty times. At a low temperature it is likely
-    to write the same thing next, so after `after` identical misses in a row the next
-    temperature in `steps` is used, and the one after it if the misses go on. A miss is a
-    call that fails, compared by its error without the line and column, or a lookup that
-    finds no page, compared by its topic. A script that validates or runs is progress, and
-    the temperature drops back to the run's own for the careful work that follows.
+    At a low temperature a model repeating a miss (see missed()) is likely to write the same
+    thing next, so after `after` identical misses in a row the next temperature in `steps` is
+    used, and the one after it if the misses go on. A script that validates or runs is
+    progress, and the temperature drops back to the run's own for the careful work that
+    follows.
     """
 
     def __init__(self, base: float, steps: list[float], after: int):
@@ -639,14 +655,9 @@ class Escalation:
     def observe(self, name: str, arguments: dict | None, problem: str | None,
                 text: str) -> str | None:
         """Takes in one call; returns why the temperature changed, or None."""
-        if problem:
-            miss = re.sub(r"^script:\d+:\d+: ", "", problem)[:80]
-        elif name == "relix_learn" and text.startswith("No page is called"):
-            miss = "no page for " + str((arguments or {}).get("topic", "")).strip().lower()
-        else:
-            miss = None
+        miss = missed(name, arguments, problem, text)
         if miss is None:
-            if name in ("relix_validate", "relix_run", "relix_explain") and self.temperature != self.base:
+            if name in PROGRESS and self.temperature != self.base:
                 self.temperature, self.step, self.last, self.repeats = self.base, 0, None, 0
                 return f"back to {self.base}: a script went through"
             return None
@@ -658,6 +669,47 @@ class Escalation:
             self.repeats = 0
             return f"up to {self.temperature}: {self.after} times in a row, {miss}"
         return None
+
+
+class Nudge:
+    """When to tell a model that it is repeating itself, with --nudge-after.
+
+    A client can see what the model can lose sight of: the same miss (see missed()) `after`
+    times in a row. Asking again will miss again, so the model is told so, and what to try
+    instead, as the reminders tell it to submit. A script that validates or runs ends the
+    run of misses; so does a nudge, so a model that goes on is told again after as many more.
+    """
+
+    def __init__(self, after: int):
+        self.after = after
+        self.last = None
+        self.repeats = 0
+
+    def observe(self, name: str, arguments: dict | None, problem: str | None,
+                text: str) -> str | None:
+        """Takes in one call; returns what to tell the model, or None."""
+        miss = missed(name, arguments, problem, text)
+        if miss is None:
+            if name in PROGRESS:
+                self.last, self.repeats = None, 0
+            return None
+        self.repeats = self.repeats + 1 if miss == self.last else 1
+        self.last = miss
+        if self.repeats < self.after:
+            return None
+        self.last, self.repeats = None, 0
+        if problem:
+            return REPEATED_ERROR.format(n=self.after, error=problem)
+        return REPEATED_LOOKUP.format(n=self.after, topic=str((arguments or {}).get("topic", "")).strip())
+
+
+REPEATED_ERROR = ("You have had the same error {n} times in a row: {error}\n"
+                  "The same script will fail the same way again. Read what the error says to "
+                  "write instead and change that part of the script; if it doesn't say, look up "
+                  "the operator or function with relix_learn, or answer the question another way.")
+REPEATED_LOOKUP = ("relix_learn has found no page for '{topic}' {n} times in a row, and will not "
+                   "find one if asked again. Call relix_learn with no topic for the contents, or "
+                   "look up another word.")
 
 
 def described(key: str, tables: list[dict]) -> str:
@@ -762,6 +814,8 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args, budget: int
     escalation = Escalation(SAMPLING["temperature"], args.escalate, args.escalate_after) \
         if args.escalate else None
     escalations = []
+    nudge = Nudge(args.nudge_after) if args.nudge_after else None
+    nudges = []
     started = time.time()
     for _ in range(args.max_turns):
         # Until it submits, every turn must be a call (--tool-choice required), so the only way
@@ -866,6 +920,12 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args, budget: int
                     escalations.append({"call": calls, "temperature": escalation.temperature,
                                         "why": changed})
                     events.append({"harness": f"temperature {changed}"})
+            if nudge:
+                told = nudge.observe(name, arguments, problem, text_of(result))
+                if told:
+                    nudges.append({"call": calls, "miss": missed(name, arguments, problem, text_of(result))})
+                    messages.append({"role": "user", "content": told})
+                    events.append({"harness": told})
         if asks and submission is None and args.on_ask == "stop":
             stop = "asked"
             break
@@ -874,7 +934,7 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args, budget: int
             break
     return {"events": events, "calls": calls, "failures": failures, "learn": topics, "runs": runs,
             "asks": asks, "recovered": recovered, "retries": retries, "reminders": reminders,
-            "garbled": garbled, "escalations": escalations,
+            "garbled": garbled, "escalations": escalations, "nudges": nudges,
             "submission": submission, "final_text": final_text, "stop": stop,
             "seconds": round(time.time() - started, 1)}
 
@@ -913,6 +973,7 @@ def attempted(item: dict, data: str, prompt: str, server: McpServer, args) -> di
             "runs": first["runs"] + moved(second["runs"]),
             "asks": first["asks"] + moved(second["asks"]),
             "escalations": first["escalations"] + moved(second["escalations"]),
+            "nudges": first["nudges"] + moved(second["nudges"]),
             **{k: first[k] + second[k] for k in ("recovered", "retries", "reminders", "garbled")},
             "seconds": round(first["seconds"] + second["seconds"], 1),
             "attempts": 2, "first_stop": first["stop"], "first_calls": shift}
@@ -961,6 +1022,10 @@ def main(argv=None) -> int:
                         help="give the first attempt N calls; if it ends without submitting, start a "
                              "fresh conversation with the rest of --max-calls (default: off; recorded "
                              "per question as 'attempts')")
+    parser.add_argument("--nudge-after", type=int, default=None, metavar="N",
+                        help="tell a model that makes one miss N times in a row that it is repeating "
+                             "itself, and what to try instead (default: off; recorded per question "
+                             "as 'nudges')")
     parser.add_argument("--escalate-after", type=int, default=3,
                         help="identical misses in a row before --escalate raises the temperature (default 3)")
     parser.add_argument("--workers", type=int, default=1,
@@ -1088,7 +1153,7 @@ def main(argv=None) -> int:
                       recovered_calls=outcome["recovered"], dropped_call_retries=outcome["retries"],
                       garbled_call_retries=outcome["garbled"],
                       submitted_after_reminder=bool(outcome["reminders"] and outcome["submission"]),
-                      escalations=outcome["escalations"],
+                      escalations=outcome["escalations"], nudges=outcome["nudges"],
                       attempts=outcome["attempts"], first_attempt_stop=outcome.get("first_stop"),
                       temperature_at_submit=(outcome["submission"] or {}).get("temperature"),
                       gold_columns=(gold or {}).get("columns"),
@@ -1130,6 +1195,20 @@ def escalated(records: list[dict]) -> list[str]:
     return [f"Temperature raised (--escalate) in {len(raised)} questions: "
             + ", ".join(f"{n} {g}" for g, n in grades.most_common())
             + f". Right rows in {len(right)} of them, {len(hot)} submitted while it was raised.", ""]
+
+
+def nudged(records: list[dict]) -> list[str]:
+    """The summary's line on --nudge-after: how many questions were nudged, and how those
+    went. None when none were."""
+    told = [r for r in records if r.get("nudges")]
+    if not told:
+        return []
+    grades = collections.Counter(r["grade"] for r in told)
+    right = sum(grades[g] for g in RIGHT_ROWS)
+    return [f"Nudged for repeating a miss (--nudge-after) in {len(told)} questions, "
+            f"{sum(len(r['nudges']) for r in told)} times: "
+            + ", ".join(f"{n} {g}" for g, n in grades.most_common())
+            + f". Right rows in {right} of them.", ""]
 
 
 def retried(records: list[dict]) -> list[str]:
@@ -1181,7 +1260,7 @@ def summary(records: list[dict], args, server_info: dict) -> str:
                   f"{sum(1 for r in records if r.get('submitted_after_reminder'))}. "
                   f"Questions where the model asked the user: "
                   f"{sum(1 for r in records if r.get('asks'))}.", "",
-                  *escalated(records), *retried(records),
+                  *escalated(records), *nudged(records), *retried(records),
               "## By category", "",
               "Right rows: the gold's rows in any columns (match, extra_columns or missing_columns), "
               "the nearest to relix's agentic grade, which also tolerates extra columns.", "",

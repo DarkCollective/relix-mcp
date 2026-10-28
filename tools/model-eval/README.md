@@ -77,6 +77,15 @@ the temperature and why) and `temperature_at_submit`, and the summary counts the
 questions whose temperature rose and how they went. That way a pass can be traced to
 the rise rather than credited to the run.
 
+`--nudge-after 3` tells a model that makes the same miss 3 times in a row (as
+`--escalate` counts them) that it is repeating itself, as a client could: the same error
+will come back, so change what the error points at, look the operator up, or answer
+another way; or, for a lookup that keeps finding no page, read the contents instead. It
+is a message after the call's result, which is left as the server sent it. A script that
+validates or runs starts the count again, and so does a nudge, so a model that goes on is
+told again after 3 more. Off by default; each question records `nudges` (the call and the
+miss), and the summary counts the questions nudged and how they went.
+
 `--retry-after 16` gives the first attempt 16 calls. If it ends without submitting (out
 of calls, or stopped), a fresh conversation starts from the question with the rest of
 `--max-calls`. The failed attempt, and the pages it read, are no longer in front of the
