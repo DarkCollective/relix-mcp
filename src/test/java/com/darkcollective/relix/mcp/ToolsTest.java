@@ -550,6 +550,16 @@ class ToolsTest {
     }
 
     @Test
+    void aWholeQuestionFindsItsOperatorAheadOfTheLongPagesThatListEveryWord() {
+        // The optimizer and grammar pages mention every operator, so a question in many
+        // words matched them best until a page's length was weighed: these ranked them first.
+        assertThat(firstHit("Group products into bundles of products bought together, directly "
+                + "or through other products, labelled bundle.")).isEqualTo("Cluster");
+        assertThat(firstHit("Which issues can each issue reach through blocking links, and in how "
+                + "many hops?")).doesNotStartWith("Optimizer").doesNotStartWith("Grammar");
+    }
+
+    @Test
     void anAsciiKeywordLandsOnItsPageNotTheQuantifier() {
         // "anti" is inside "quantifier"; asking for the ASCII keyword ANTI must land on
         // the anti join. The engine registers each operator's ASCII spelling as a page

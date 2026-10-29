@@ -304,17 +304,24 @@ final class Reference {
         }
         record Scored(Page page, double score, String rarest) {
         }
+        // A long page holds most words somewhere: the optimizer and grammar pages mention
+        // every operator. A word counts for less in a page the longer it is than the
+        // average, as BM25 weighs it, so a page about the request outranks one that
+        // merely lists its words.
+        double average = corpus.stream().mapToInt(p -> p.text().length()).average().orElse(1);
         List<Scored> scored = new ArrayList<>();
         for (Page page : corpus) {
             double score = 0;
             String rarest = null;
+            double length = page.text().length() / average;
             for (String word : words) {
                 int inBody = occurrences(page.text(), word);
                 if (inBody == 0) {
                     continue;
                 }
                 boolean inHeading = occurrences(page.heading(), word) > 0;
-                score += weight.get(word) * (1 + Math.min(inBody, 5) / 5.0 + (inHeading ? 2 : 0));
+                double frequency = inBody * (K1 + 1) / (inBody + K1 * (1 - B + B * length));
+                score += weight.get(word) * (frequency + (inHeading ? 3 : 0));
                 if (rarest == null || weight.get(word) > weight.get(rarest)) {
                     rarest = word;
                 }
@@ -384,6 +391,10 @@ final class Reference {
         }
         return words;
     }
+
+    /** BM25's term-frequency saturation and length normalisation, at their usual values. */
+    private static final double K1 = 1.2;
+    private static final double B = 0.75;
 
     private static final java.util.Set<String> FILLER = java.util.Set.of(
             "a", "an", "the", "and", "or", "of", "to", "in", "on", "for", "by", "with", "is",
