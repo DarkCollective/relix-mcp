@@ -105,8 +105,9 @@ question's own words and puts the brief page (syntax and one example) of the fir
 the first message, before the question. Each question records the pages in `retrieved`.
 
 `--hosted ENV` runs against a hosted OpenAI-compatible `--api` instead of LM Studio: it sends
-the key in the environment variable `ENV` as a bearer token, sends only the temperature (and
-`--reasoning-effort` when given) instead of LM Studio's preset, and skips the context check.
+the key in the environment variable `ENV` as a bearer token, sends only `--temperature` and
+`--reasoning-effort`, each when given, instead of LM Studio's preset (some hosted models refuse
+a temperature), and skips the context check.
 `--reasoning-effort low|medium|high` overrides the preset's `medium`. The summary gives the
 sampling a run sent.
 

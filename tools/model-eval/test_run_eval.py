@@ -388,13 +388,14 @@ class AStuckAttemptGetsAFreshOne(unittest.TestCase):
 class AHostedModelGetsOnlyWhatEveryApiAccepts(unittest.TestCase):
 
     def args(self, **kw):
-        return type("Args", (), {"hosted": None, "reasoning_effort": None, **kw})()
+        return type("Args", (), {"hosted": None, "reasoning_effort": None, "temperature": None, **kw})()
 
     def test_lm_studio_gets_its_preset(self):
         self.assertIs(run_eval.sampled(self.args()), run_eval.SAMPLING)
 
-    def test_a_hosted_api_gets_the_temperature_and_a_named_effort(self):
-        self.assertEqual(set(run_eval.sampled(self.args(hosted="KEY"))), {"temperature"})
+    def test_a_hosted_api_gets_only_a_named_temperature_and_effort(self):
+        self.assertEqual(run_eval.sampled(self.args(hosted="KEY")), {})
+        self.assertEqual(run_eval.sampled(self.args(hosted="KEY", temperature=0.2)), {"temperature": 0.2})
         self.assertEqual(run_eval.sampled(self.args(hosted="KEY", reasoning_effort="high"))["reasoning_effort"],
                          "high")
 
