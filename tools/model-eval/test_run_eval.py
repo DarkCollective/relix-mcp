@@ -219,6 +219,58 @@ class ADayIsItsMidnight(unittest.TestCase):
         self.assertEqual(run_eval.compare(gold, result(["at"], ["DATE"], [["2026-10-21"]])), "mismatch")
 
 
+class AnInstantIsTheSameInAnyZone(unittest.TestCase):
+
+    gold = result(["visit_id", "visit_at_tz"], ["NUMBER", "TIMESTAMPTZ"],
+                  [[1, "2026-03-02T15:30:00Z"], [3, "2026-05-18T08:15:00Z"]])
+
+    def test_the_same_instants_at_another_offset_match(self):
+        answer = result(["visit_id", "visit_at_tz"], ["NUMBER", "TIMESTAMPTZ"],
+                        [[1, "2026-03-02T10:30:00-05:00"], [3, "2026-05-18T04:15:00-04:00"]])
+        self.assertEqual(run_eval.compare(self.gold, answer), "match")
+
+    def test_the_wall_clock_time_is_not_the_instant(self):
+        answer = result(["visit_id", "visit_at_tz"], ["NUMBER", "TIMESTAMP"],
+                        [[1, "2026-03-02T10:30:00Z"], [3, "2026-05-18T04:15:00Z"]])
+        self.assertEqual(run_eval.compare(self.gold, answer), "mismatch")
+
+
+TREE = "query {\n    TREE device_id BY parent_device_id AS children (mesh)\n};"
+
+
+class TreeSiblingsMayComeInAnyOrder(unittest.TestCase):
+
+    gold = run_eval.graded_as(TREE, result(
+        ["device_id", "parent_device_id", "children"], ["NUMBER", "NUMBER", "ANY"],
+        [[6000, None, "[{device_id: 6001, parent_device_id: 6000, children: [{device_id: 502, "
+                      "parent_device_id: 6001, children: []}]}, {device_id: 501, "
+                      "parent_device_id: 6000, children: []}]"]]))
+
+    def answer(self, children):
+        return result(["device_id", "parent_device_id", "children"], ["NUMBER", "NUMBER", "ANY"],
+                      [[6000, None, children]])
+
+    def test_the_gold_names_its_children_column(self):
+        self.assertEqual(self.gold["unordered"], "children")
+
+    def test_siblings_in_another_order_match(self):
+        answer = self.answer("[{device_id: 501, parent_device_id: 6000, children: []}, {device_id: 6001, "
+                             "parent_device_id: 6000, children: [{device_id: 502, parent_device_id: 6001, "
+                             "children: []}]}]")
+        self.assertEqual(run_eval.compare(self.gold, answer), "match")
+
+    def test_a_child_under_another_parent_does_not_match(self):
+        answer = self.answer("[{device_id: 501, parent_device_id: 6000, children: [{device_id: 502, "
+                             "parent_device_id: 6001, children: []}]}, {device_id: 6001, "
+                             "parent_device_id: 6000, children: []}]")
+        self.assertEqual(run_eval.compare(self.gold, answer), "mismatch")
+
+    def test_a_tree_with_order_keeps_its_order(self):
+        ordered = TREE.replace("AS children", "ORDER device_id DESC AS children")
+        plain = {k: v for k, v in self.gold.items() if k != "unordered"}
+        self.assertNotIn("unordered", run_eval.graded_as(ordered, plain))
+
+
 class TemperatureRisesForAStuckModel(unittest.TestCase):
 
     ALIAS = "script:6:29: error: Syntax error in RA expression: Relix has no table aliases: write RENAME o (orders)"
