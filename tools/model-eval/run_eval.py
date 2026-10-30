@@ -262,6 +262,11 @@ _ROLLUP = re.compile(r"\b(?:ROLLUP|CUBE)\s*\(([^()]*)\)", re.IGNORECASE)
 _GROUPING_LEVEL = re.compile(r"\bGROUPING(?:_ID)?\s*\([^()]*\)\s*(?:→|->)\s*(\w+)", re.IGNORECASE)
 _PIVOT = re.compile(r"\bPIVOT\s+\w+\s+BY\s+\w+\s+PER\s+([\w\s,]*?)\s*\(", re.IGNORECASE)
 _TREE = re.compile(r"\bTREE\b([^;{}]*?)\bAS\s+(\w+)", re.IGNORECASE)
+_COLLECT = re.compile(r"\bCOLLECT\s*\(([^()]*)\)\s*(?:→|->)\s*(\w+)", re.IGNORECASE)
+_STRING_AGG = re.compile(r"\bSTRING_AGG\s*\([^()']*'([^']*)'([^()]*)\)\s*(?:→|->)\s*(\w+)", re.IGNORECASE)
+_ARRAY_TO_STRING = re.compile(r"\bARRAY_TO_STRING\s*\(\s*(\w+)\s*,\s*'([^']*)'\s*\)\s*(?:→|->)\s*(\w+)",
+                              re.IGNORECASE)
+_ORDERED = re.compile(r"\bORDER\b", re.IGNORECASE)
 
 
 def graded_as(gold: str, result: dict) -> dict:
@@ -270,15 +275,17 @@ def graded_as(gold: str, result: dict) -> dict:
     A CLUSTER numbers its clusters 1, 2, ..., but any labels that group the same rows are
     as right, so its label column ("partition") is compared as a partition. So is the column
     a GROUPING names: its codes (0, 1, 3) are SQL's bit mask, and a question that asks to
-    mark each row's level is as well answered by any labels that tell the same levels apart. A GROUPING SETS
-    result ("grouping_sets", its sets of columns) may be answered by one query per
+    mark each row's level is as well answered by any labels that tell the same levels apart.
+    A GROUPING SETS result ("grouping_sets", its sets of columns) may be answered by one query per
     grouping, graded stacked, or by one result laid out long, graded against the gold
     unpivoted. A ROLLUP or CUBE leaves NULL in its key columns ("subtotals") on a
     subtotal row, where an answer may write a label such as 'Subtotal' instead. A PIVOT
     leaves NULL in a value column ("pivot_values") where no row had that combination,
     where an answer that sums or counts conditionally has 0. A TREE with no ORDER keeps its
-    input's order among siblings, which the question doesn't ask for, so its children
-    column ("unordered") is compared with the siblings in any order.
+    input's order among siblings, and a COLLECT with no ORDER BY its group's order, which the
+    question doesn't ask for, so those columns ("unordered") are compared with their lists'
+    items in any order. So are the items of a string a STRING_AGG with no ORDER BY joins, or
+    an ARRAY_TO_STRING of such a COLLECT ("joined", each column's separator).
     """
     label = _CLUSTER_LABEL.search(gold) or _GROUPING_LEVEL.search(gold)
     if label and label.group(1) in result["columns"]:
@@ -296,10 +303,17 @@ def graded_as(gold: str, result: dict) -> dict:
         values = [c for c in result["columns"] if c not in per]
         if values:
             result = {**result, "pivot_values": values}
-    tree = _TREE.search(gold)
-    if tree and not re.search(r"\bORDER\b", tree.group(1), re.IGNORECASE) \
-            and tree.group(2) in result["columns"]:
-        result = {**result, "unordered": tree.group(2)}
+    collected = {m.group(2) for m in _COLLECT.finditer(gold) if not _ORDERED.search(m.group(1))}
+    unordered = [m.group(2) for m in _TREE.finditer(gold) if not _ORDERED.search(m.group(1))] \
+        + sorted(collected)
+    unordered = [c for c in unordered if c in result["columns"]]
+    if unordered:
+        result = {**result, "unordered": unordered}
+    joined = {m.group(3): m.group(1) for m in _STRING_AGG.finditer(gold) if not _ORDERED.search(m.group(2))}
+    joined.update({m.group(3): m.group(2) for m in _ARRAY_TO_STRING.finditer(gold) if m.group(1) in collected})
+    joined = {c: sep for c, sep in joined.items() if c in result["columns"] and sep}
+    if joined:
+        result = {**result, "joined": joined}
     return result
 
 
@@ -414,6 +428,11 @@ def _nested(text: str):
     return whole if at == len(text) else text
 
 
+def _items(value, separator: str):
+    """A joined string with its items in one order: 'b + a' and 'a + b' are the same."""
+    return separator.join(sorted(value.split(separator))) if isinstance(value, str) else value
+
+
 def _columns(result: dict) -> list[list]:
     types = result.get("types") or [""] * len(result["columns"])
     rows = result.get("rows") or []
@@ -436,7 +455,8 @@ def compare(gold: dict, answer: dict) -> str:
     label = gold["columns"].index(gold["partition"]) if gold.get("partition") else None
     subtotals = {gold["columns"].index(k) for k in gold.get("subtotals") or []}
     zeroed = {gold["columns"].index(k) for k in gold.get("pivot_values") or []}
-    unordered = {gold["columns"].index(gold["unordered"])} if gold.get("unordered") else set()
+    unordered = {gold["columns"].index(k) for k in gold.get("unordered") or []}
+    joined = {gold["columns"].index(k): sep for k, sep in (gold.get("joined") or {}).items()}
     if 0 < len(answer_cols) < len(gold_cols) and compare(answer, gold) == "extra_columns":
         # The gold's rows, but fewer of its columns: the counterpart of extra_columns, a
         # reading of which columns to show rather than wrong rows.
@@ -451,12 +471,16 @@ def compare(gold: dict, answer: dict) -> str:
         gold_cols[i] = _zeroed(gold_cols[i])
     for i in unordered:
         gold_cols[i] = [_nested(v) if isinstance(v, str) else v for v in gold_cols[i]]
+    for i, sep in joined.items():
+        gold_cols[i] = [_items(v, sep) for v in gold_cols[i]]
 
     def column(i: int, j: int) -> list:
         if i in zeroed:
             return _zeroed(answer_cols[j])
         if i in unordered:
             return [_nested(v) if isinstance(v, str) else v for v in answer_cols[j]]
+        if i in joined:
+            return [_items(v, joined[i]) for v in answer_cols[j]]
         return relabelled.get((i, j), answer_cols[j])
 
     sizes = [_group_sizes(c) for c in answer_cols]

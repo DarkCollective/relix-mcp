@@ -251,7 +251,7 @@ class TreeSiblingsMayComeInAnyOrder(unittest.TestCase):
                       [[6000, None, children]])
 
     def test_the_gold_names_its_children_column(self):
-        self.assertEqual(self.gold["unordered"], "children")
+        self.assertEqual(self.gold["unordered"], ["children"])
 
     def test_siblings_in_another_order_match(self):
         answer = self.answer("[{device_id: 501, parent_device_id: 6000, children: []}, {device_id: 6001, "
@@ -292,6 +292,55 @@ class AGroupingLevelMayBeLabelledAnyWay(unittest.TestCase):
         answer = result(["floor", "device_count", "level"], ["NUMBER", "NUMBER", "STRING"],
                         [[0, 12, "row"], [1, 8, "row"], [None, 20, "row"]])
         self.assertEqual(run_eval.compare(self.gold, answer), "mismatch")
+
+
+BASKET = ("Names := { γ order_id, COLLECT(name) → names (order_items ⋈ π product_id, name (products)) };\n"
+          "query {\n    π order_id, ARRAY_TO_STRING(names, ' + ') → basket (Names)\n};")
+DEVICE_NAMES = "query {\n    γ room_id, COLLECT(name) → device_names (devices)\n};"
+
+
+class AggregatedItemsMayComeInAnyOrder(unittest.TestCase):
+
+    basket = run_eval.graded_as(BASKET, result(
+        ["order_id", "basket"], ["NUMBER", "STRING"],
+        [[1002, "Wireless Mouse + The Relix Handbook"], [1003, "The Relix Handbook"]]))
+    names = run_eval.graded_as(DEVICE_NAMES, result(
+        ["room_id", "device_names"], ["NUMBER", "ANY"], [[202, "[Kitchen Device 2, Kitchen Device 1]"]]))
+
+    def test_the_golds_name_their_columns(self):
+        self.assertEqual(self.basket["joined"], {"basket": " + "})
+        self.assertEqual(self.names["unordered"], ["device_names"])
+
+    def test_a_joined_string_in_another_order_matches(self):
+        answer = result(["order_id", "basket"], ["NUMBER", "STRING"],
+                        [[1002, "The Relix Handbook + Wireless Mouse"], [1003, "The Relix Handbook"]])
+        self.assertEqual(run_eval.compare(self.basket, answer), "match")
+
+    def test_another_separator_does_not_match(self):
+        answer = result(["order_id", "basket"], ["NUMBER", "STRING"],
+                        [[1002, "Wireless Mouse, The Relix Handbook"], [1003, "The Relix Handbook"]])
+        self.assertEqual(run_eval.compare(self.basket, answer), "mismatch")
+
+    def test_a_string_agg_without_order_is_joined(self):
+        gold = run_eval.graded_as("query { γ order_id, STRING_AGG(name, ' + ') → basket (Items) };",
+                                  result(["order_id", "basket"], ["NUMBER", "STRING"], [[1002, "b + a"]]))
+        self.assertEqual(gold["joined"], {"basket": " + "})
+
+    def test_an_ordered_aggregate_keeps_its_order(self):
+        for gold in ("query { γ order_id, STRING_AGG(name, ' + ' ORDER BY name) → basket (Items) };",
+                     "query { γ room_id, COLLECT(name ORDER BY name) → device_names (devices) };"):
+            marked = run_eval.graded_as(gold, result(["order_id", "basket", "room_id", "device_names"],
+                                                     ["NUMBER"] * 4, []))
+            self.assertNotIn("joined", marked)
+            self.assertNotIn("unordered", marked)
+
+    def test_an_array_in_another_order_matches(self):
+        answer = result(["room_id", "device_names"], ["NUMBER", "ANY"], [[202, "[Kitchen Device 1, Kitchen Device 2]"]])
+        self.assertEqual(run_eval.compare(self.names, answer), "match")
+
+    def test_an_array_missing_an_item_does_not_match(self):
+        answer = result(["room_id", "device_names"], ["NUMBER", "ANY"], [[202, "[Kitchen Device 1]"]])
+        self.assertEqual(run_eval.compare(self.names, answer), "mismatch")
 
 
 class TemperatureRisesForAStuckModel(unittest.TestCase):
