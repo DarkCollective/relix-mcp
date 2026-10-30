@@ -588,11 +588,22 @@ def openai_tools(tools: list[dict]) -> list[dict]:
         for t in tools]
 
 
-def chat(api: str, payload: dict, timeout: int) -> dict:
+def chat(api: str, payload: dict, timeout: int, key: str | None = None) -> dict:
+    headers = {"Content-Type": "application/json", **({"Authorization": f"Bearer {key}"} if key else {})}
     request = urllib.request.Request(api + "/chat/completions", data=json.dumps(payload).encode(),
-                                     headers={"Content-Type": "application/json"})
+                                     headers=headers)
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.load(response)
+
+
+def sampled(args) -> dict:
+    """What a request sends besides the conversation. LM Studio gets its saved preset; a hosted
+    API (--hosted) only the temperature, and the reasoning effort when --reasoning-effort names
+    one, since top_k, min_p and repeat_penalty are LM Studio's own and others refuse them."""
+    if not getattr(args, "hosted", None):
+        return SAMPLING
+    effort = getattr(args, "reasoning_effort", None)
+    return {"temperature": SAMPLING["temperature"], **({"reasoning_effort": effort} if effort else {})}
 
 
 def loaded_context(api: str, model: str) -> int | None:
@@ -720,6 +731,31 @@ REPEATED_LOOKUP = ("relix_learn has found no page for '{topic}' {n} times in a r
                    "look up another word.")
 
 
+# --retrieve: what a client could do for a model that rarely asks the reference itself. It
+# asks relix_learn with the question's own words and puts the brief page (syntax and one
+# example) of the first hits in front of the model, before its first turn.
+RETRIEVED = ("Reference pages relix_learn found for this question's words, most relevant first. "
+             "Their examples use other tables; use a page only if it fits the question.")
+_HIT = re.compile(r"^- [^\n]*?\[([^\]\s]+\.md)\]:", re.MULTILINE)
+
+
+def retrieved(server: McpServer, question: str, k: int) -> tuple[list[str], str]:
+    """The paths of the first k pages relix_learn finds for a question, and their brief pages."""
+    paths = _HIT.findall(text_of(server.call("relix_learn", {"topic": question})))[:k]
+    pages = [text_of(server.call("relix_learn", {"topic": p, "detail": "brief"})) for p in paths]
+    return paths, "\n\n".join([RETRIEVED, *pages]) if pages else ""
+
+
+# --catalogue: a list of operators in the system prompt, each with the tasks it is for and the
+# page relix_learn gives for it, so the model can know an operator exists without searching.
+_PAGE = re.compile(r"\[([^\]\s]+\.md)\]")
+
+
+def catalogue_pages(text: str) -> list[str]:
+    """The relix_learn page paths a catalogue names."""
+    return _PAGE.findall(text)
+
+
 def described(key: str, tables: list[dict]) -> str:
     """What the model is told of data loaded for it: the key, and each table's columns."""
     lines = [f'The data is loaded under the data key {key}. Pass "data": "{key}" with every '
@@ -814,8 +850,10 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args, budget: int
         given = described(*server.load(item["suite"], data))
     else:
         given = f"Here is the data.\n\n{data}"
+    shown, pages = retrieved(server, item["instruction"], args.retrieve) \
+        if getattr(args, "retrieve", 0) else ([], "")
     messages = [{"role": "system", "content": prompt},
-                {"role": "user", "content": f"{given}\n\n{item['instruction']}"}]
+                {"role": "user", "content": "\n\n".join(p for p in (given, pages, item["instruction"]) if p)}]
     events, calls, failures, topics, runs = [], 0, [], [], []
     asks, recovered, retries, reminders, garbled = [], 0, 0, 0, 0
     submission, final_text, stop = None, "", "turns"
@@ -829,10 +867,10 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args, budget: int
         # Until it submits, every turn must be a call (--tool-choice required), so the only way
         # to finish is relix_submit; after it, one turn with no calls for the closing reply.
         payload = {"model": args.model, "messages": messages, "tools": tools,
-                   "tool_choice": "none" if submission is not None else args.tool_choice, **SAMPLING,
+                   "tool_choice": "none" if submission is not None else args.tool_choice, **sampled(args),
                    **({"temperature": escalation.temperature} if escalation else {})}
         try:
-            reply = chat(args.api, payload, args.timeout)
+            reply = chat(args.api, payload, args.timeout, getattr(args, "api_key", None))
         except urllib.error.HTTPError as e:
             stop = f"api_error: {e.code} {e.read().decode(errors='replace')[:300]}"
             break
@@ -951,7 +989,7 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args, budget: int
     return {"events": events, "calls": calls, "failures": failures, "learn": topics, "runs": runs,
             "asks": asks, "recovered": recovered, "retries": retries, "reminders": reminders,
             "garbled": garbled, "escalations": escalations, "nudges": nudges,
-            "server_errors": server_errors,
+            "server_errors": server_errors, "retrieved": shown,
             "submission": submission, "final_text": final_text, "stop": stop,
             "seconds": round(time.time() - started, 1)}
 
@@ -1044,6 +1082,19 @@ def main(argv=None) -> int:
                         help="tell a model that makes one miss N times in a row that it is repeating "
                              "itself, and what to try instead (default: off; recorded per question "
                              "as 'nudges')")
+    parser.add_argument("--catalogue", metavar="FILE",
+                        help="append FILE, a list of operators with their relix_learn pages, to the "
+                             "system prompt; every page it names must exist (default: off)")
+    parser.add_argument("--retrieve", type=int, default=0, metavar="K",
+                        help="ask relix_learn with the question's words and show the model the brief "
+                             "pages of the first K hits before its first turn (default: off; "
+                             "recorded per question as 'retrieved')")
+    parser.add_argument("--hosted", metavar="ENV",
+                        help="a hosted OpenAI-compatible --api: send the key in environment variable "
+                             "ENV as a bearer token, send only the temperature (and "
+                             "--reasoning-effort), and skip LM Studio's context check")
+    parser.add_argument("--reasoning-effort", choices=("low", "medium", "high"),
+                        help="overrides the preset's 'medium'")
     parser.add_argument("--escalate-after", type=int, default=3,
                         help="identical misses in a row before --escalate raises the temperature (default 3)")
     parser.add_argument("--workers", type=int, default=1,
@@ -1057,8 +1108,12 @@ def main(argv=None) -> int:
     parser.add_argument("--out", default=os.path.join(HERE, "runs"))
     args = parser.parse_args(argv)
 
-    context = loaded_context(args.api, args.model)
-    if context is None or context < args.min_context:
+    args.api_key = os.environ.get(args.hosted) if args.hosted else None
+    if args.hosted and not args.api_key:
+        print(f"--hosted {args.hosted}: that environment variable is not set", file=sys.stderr)
+        return 2
+    context = None if args.hosted else loaded_context(args.api, args.model)
+    if not args.hosted and (context is None or context < args.min_context):
         print(f"{args.model} is {'not loaded' if context is None else f'loaded with a {context}-token context'}"
               f"; it needs at least {args.min_context}. Load it first:\n"
               f"  ~/.lmstudio/bin/lms load {args.model} --context-length 65536 --parallel {args.workers}",
@@ -1070,6 +1125,8 @@ def main(argv=None) -> int:
         prompt = f.read()
     if args.temperature is not None:
         SAMPLING["temperature"] = args.temperature
+    if args.reasoning_effort:
+        SAMPLING["reasoning_effort"] = args.reasoning_effort
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     out = os.path.join(args.out, stamp)
     os.makedirs(os.path.join(out, "transcripts"))
@@ -1082,6 +1139,18 @@ def main(argv=None) -> int:
     # The grading server returns results whole: the model's are cut at the server's 200-row
     # cap, and two cuts of the same rows may differ, so a cut result is run again here.
     grader = McpServer(args.launcher, now, max_rows=GRADING_ROWS)
+    if args.catalogue:
+        with open(args.catalogue) as f:
+            catalogue = f.read()
+        missing = [p for p in catalogue_pages(catalogue)
+                   if text_of(grader.call("relix_learn", {"topic": p, "detail": "brief"}))
+                   .startswith("No page is called")]
+        if missing:
+            print(f"{args.catalogue} names pages relix_learn doesn't have: {', '.join(missing)}",
+                  file=sys.stderr)
+            grader.close()
+            return 2
+        prompt = f"{prompt.rstrip()}\n\n{catalogue}"
     data, items, golds = {}, [], {}
     for name in args.suite:
         data[name], suite_items = load_suite(args.suites_dir, name)
@@ -1172,7 +1241,7 @@ def main(argv=None) -> int:
                       garbled_call_retries=outcome["garbled"],
                       submitted_after_reminder=bool(outcome["reminders"] and outcome["submission"]),
                       escalations=outcome["escalations"], nudges=outcome["nudges"],
-                      server_errors=outcome["server_errors"],
+                      server_errors=outcome["server_errors"], retrieved=outcome.get("retrieved", []),
                       attempts=outcome["attempts"], first_attempt_stop=outcome.get("first_stop"),
                       temperature_at_submit=(outcome["submission"] or {}).get("temperature"),
                       gold_columns=(gold or {}).get("columns"),
@@ -1251,6 +1320,9 @@ def summary(records: list[dict], args, server_info: dict) -> str:
              f"Suites: {', '.join(args.suite)}. Questions: {total}. "
              f"Data: {'loaded once, by key' if args.data == 'key' else 'inline, copied by the model'}. "
              f"NOW(): {getattr(args, 'pinned_now', None) or 'the real clock'}.", "",
+             f"Sampling: {json.dumps(sampled(args))}. "
+             f"Operator catalogue: {getattr(args, 'catalogue', None) or 'none'}. "
+             f"Pages retrieved before the first turn: {getattr(args, 'retrieve', 0) or 'none'}.", "",
              "| grade | count |", "|---|---|"]
     lines += [f"| {g} | {n} |" for g, n in grades.most_common()]
     passed = grades["match"]

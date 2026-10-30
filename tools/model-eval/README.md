@@ -94,6 +94,22 @@ neither is an API error or a question the model put to the user. Each question r
 `attempts` and `first_attempt_stop`, and its transcript marks where the second attempt
 starts.
 
+`--catalogue operator-catalogue.txt` adds a list of the operators SQL lacks to the system
+prompt, each with the tasks it is for in a question's words and its `relix_learn` page. The
+model rarely asks `relix_learn` before writing (2% of runs), so the list lets it know an
+operator exists without searching. The run refuses to start if a page the file names isn't
+one `relix_learn` has.
+
+`--retrieve 3` does what a client could do for the model: it asks `relix_learn` with the
+question's own words and puts the brief page (syntax and one example) of the first 3 hits in
+the first message, before the question. Each question records the pages in `retrieved`.
+
+`--hosted ENV` runs against a hosted OpenAI-compatible `--api` instead of LM Studio: it sends
+the key in the environment variable `ENV` as a bearer token, sends only the temperature (and
+`--reasoning-effort` when given) instead of LM Studio's preset, and skips the context check.
+`--reasoning-effort low|medium|high` overrides the preset's `medium`. The summary gives the
+sampling a run sent.
+
 A call the server can't handle at all (a JSON-RPC error, such as an engine exception) doesn't
 end the run: the model is told the call failed, as a client would tell it, and the question goes
 on. Each question records them in `server_errors`, the transcript keeps the call's arguments to

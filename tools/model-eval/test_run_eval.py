@@ -3,6 +3,8 @@
     python3 -m unittest discover -s tools/model-eval
 """
 
+import io
+import os
 import unittest
 
 import run_eval
@@ -322,7 +324,7 @@ class AnInternalServerErrorIsAFailedCall(unittest.TestCase):
         replies = [{"tool_calls": [{"id": "1", "type": "function", "function": {
                        "name": "relix_run", "arguments": '{"script": "query R;"}'}}]},
                    {"content": ""}, {"content": ""}, {"content": ""}]
-        real, run_eval.chat = run_eval.chat, lambda api, payload, timeout: {
+        real, run_eval.chat = run_eval.chat, lambda api, payload, timeout, key=None: {
             "choices": [{"message": replies.pop(0)}]}
         try:
             args = type("Args", (), {"data": "inline", "model": "m", "tool_choice": "auto", "max_turns": 4,
@@ -381,6 +383,92 @@ class AStuckAttemptGetsAFreshOne(unittest.TestCase):
     def test_without_the_flag_one_attempt_has_the_whole_budget(self):
         out, budgets = self.attempt([self.outcome(25, "call_limit")], retry_after=None)
         self.assertEqual((out["attempts"], budgets), (1, [None]))
+
+
+class AHostedModelGetsOnlyWhatEveryApiAccepts(unittest.TestCase):
+
+    def args(self, **kw):
+        return type("Args", (), {"hosted": None, "reasoning_effort": None, **kw})()
+
+    def test_lm_studio_gets_its_preset(self):
+        self.assertIs(run_eval.sampled(self.args()), run_eval.SAMPLING)
+
+    def test_a_hosted_api_gets_the_temperature_and_a_named_effort(self):
+        self.assertEqual(set(run_eval.sampled(self.args(hosted="KEY"))), {"temperature"})
+        self.assertEqual(run_eval.sampled(self.args(hosted="KEY", reasoning_effort="high"))["reasoning_effort"],
+                         "high")
+
+    def test_the_key_is_sent_as_a_bearer_token(self):
+        sent = []
+
+        class Response(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        real = run_eval.urllib.request.urlopen
+        run_eval.urllib.request.urlopen = lambda request, timeout: sent.append(request) or Response(b"{}")
+        try:
+            run_eval.chat("https://api", {}, 1, "secret")
+            run_eval.chat("http://local", {}, 1)
+        finally:
+            run_eval.urllib.request.urlopen = real
+        self.assertEqual(sent[0].get_header("Authorization"), "Bearer secret")
+        self.assertIsNone(sent[1].get_header("Authorization"))
+
+
+class PagesAreRetrievedForTheQuestion(unittest.TestCase):
+
+    SEARCH = ("No page is called 'q'.\n\nThe ordering functions; ask learn for one by its name:\nGREATEST, LEAST\n\n"
+              " These pages mention it, most relevant first; ask learn for one by the name in brackets:\n\n"
+              "- Window Offset [operators/window-offset.md]: LAG, LEAD\n  > WINDOW LAG(x) SORT t AS p (R)\n"
+              "- MIN [aggregates/min.md]: Minimum value\n  > γ k, MIN(x) → m (R)\n"
+              "- Sort [operators/sort.md]: Sort rows\n")
+
+    class Server:
+        tools = [{"name": "relix_learn", "description": "", "inputSchema": {"type": "object"}}]
+
+        def __init__(self):
+            self.asked = []
+
+        def call(self, name, arguments):
+            self.asked.append(arguments)
+            text = PagesAreRetrievedForTheQuestion.SEARCH if "detail" not in arguments \
+                else f"# Name: {arguments['topic']}"
+            return {"content": [{"type": "text", "text": text}]}
+
+    def test_the_first_k_hits_are_fetched_brief(self):
+        server = self.Server()
+        paths, pages = run_eval.retrieved(server, "q", 2)
+        self.assertEqual(paths, ["operators/window-offset.md", "aggregates/min.md"])
+        self.assertEqual(server.asked[1:], [{"topic": p, "detail": "brief"} for p in paths])
+        self.assertTrue(pages.startswith(run_eval.RETRIEVED))
+        self.assertIn("# Name: aggregates/min.md", pages)
+
+    def test_the_pages_come_before_the_question_and_are_recorded(self):
+        sent = []
+        real, run_eval.chat = run_eval.chat, lambda api, payload, timeout, key=None: (
+            sent.append(payload["messages"][1]["content"]) or {"choices": [{"message": {"content": ""}}]})
+        try:
+            args = type("Args", (), {"data": "inline", "model": "m", "tool_choice": "auto", "max_turns": 1,
+                                     "max_calls": 25, "escalate": None, "nudge_after": None,
+                                     "reminders": 0, "on_ask": "continue", "api": "", "timeout": 1,
+                                     "retrieve": 1})()
+            out = run_eval.ask({"instruction": "the question", "suite": "s"}, "R := [];", "p", self.Server(), args)
+        finally:
+            run_eval.chat = real
+        self.assertEqual(out["retrieved"], ["operators/window-offset.md"])
+        self.assertLess(sent[0].index(run_eval.RETRIEVED), sent[0].index("the question"))
+
+
+class TheCatalogueNamesItsPages(unittest.TestCase):
+
+    def test_every_operator_line_names_a_page(self):
+        with open(os.path.join(run_eval.HERE, "operator-catalogue.txt")) as f:
+            text = f.read()
+        lines = text.split("\n- ")[1:]
+        self.assertTrue(lines)
+        for line in lines:
+            self.assertTrue(run_eval.catalogue_pages(line), line)
 
 
 if __name__ == "__main__":
