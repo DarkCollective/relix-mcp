@@ -598,12 +598,14 @@ def chat(api: str, payload: dict, timeout: int, key: str | None = None) -> dict:
 
 def sampled(args) -> dict:
     """What a request sends besides the conversation. LM Studio gets its saved preset; a hosted
-    API (--hosted) only the temperature, and the reasoning effort when --reasoning-effort names
-    one, since top_k, min_p and repeat_penalty are LM Studio's own and others refuse them."""
+    API (--hosted) only the temperature and the reasoning effort, each when its flag names one:
+    top_k, min_p and repeat_penalty are LM Studio's own, and some hosted models refuse a
+    temperature too, so a hosted model otherwise samples at its own default."""
     if not getattr(args, "hosted", None):
         return SAMPLING
-    effort = getattr(args, "reasoning_effort", None)
-    return {"temperature": SAMPLING["temperature"], **({"reasoning_effort": effort} if effort else {})}
+    temperature, effort = getattr(args, "temperature", None), getattr(args, "reasoning_effort", None)
+    return {**({"temperature": temperature} if temperature is not None else {}),
+            **({"reasoning_effort": effort} if effort else {})}
 
 
 def loaded_context(api: str, model: str) -> int | None:
@@ -959,7 +961,7 @@ def ask(item: dict, data: str, prompt: str, server: McpServer, args, budget: int
             ran = [r for r in results if r.get("failure") is None]
             if name == "relix_submit" and structured.get("submitted"):
                 submission = {"script": structured.get("script"), "results": ran,
-                              "temperature": payload["temperature"]}
+                              "temperature": payload.get("temperature")}
             finished = (name == "relix_run" and structured.get("valid") and not structured.get("stopped")
                         and results and results[-1].get("failure") is None)
             if finished:
