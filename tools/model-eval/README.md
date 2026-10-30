@@ -195,5 +195,7 @@ at midnight UTC (`2026-10-21T00:00:00Z`, as `DOWNSAMPLE` or `DATE_TRUNC` buckets
 is compared as its date (`2026-10-21`), so grouping by the day's date is as right. A value with an offset (a
 `TIMESTAMPTZ`) is compared as the instant it is, so `10:30:00-05:00` is `15:30:00Z`. A `TREE` with no
 `ORDER` keeps its input's order among siblings, which a question doesn't ask for, so in its
-children column the siblings may come in any order; with `ORDER`, the order must match. The grading tests run with
+children column the siblings may come in any order; with `ORDER`, the order must match. So may the
+items of a `COLLECT` with no `ORDER BY`, and of a string a `STRING_AGG` with no `ORDER BY` joins
+(or an `ARRAY_TO_STRING` of such a `COLLECT`), split on the gold's separator. The grading tests run with
 `python3 -m unittest discover -s tools/model-eval`.
