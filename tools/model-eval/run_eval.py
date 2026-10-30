@@ -260,6 +260,7 @@ _CLUSTER_LABEL = re.compile(r"\bCLUSTER\b[^;{}]*?\bAS\s+(\w+)", re.IGNORECASE)
 _GROUPING_SETS = re.compile(r"\bGROUPING\s+SETS\b", re.IGNORECASE)
 _ROLLUP = re.compile(r"\b(?:ROLLUP|CUBE)\s*\(([^()]*)\)", re.IGNORECASE)
 _PIVOT = re.compile(r"\bPIVOT\s+\w+\s+BY\s+\w+\s+PER\s+([\w\s,]*?)\s*\(", re.IGNORECASE)
+_TREE = re.compile(r"\bTREE\b([^;{}]*?)\bAS\s+(\w+)", re.IGNORECASE)
 
 
 def graded_as(gold: str, result: dict) -> dict:
@@ -272,7 +273,9 @@ def graded_as(gold: str, result: dict) -> dict:
     unpivoted. A ROLLUP or CUBE leaves NULL in its key columns ("subtotals") on a
     subtotal row, where an answer may write a label such as 'Subtotal' instead. A PIVOT
     leaves NULL in a value column ("pivot_values") where no row had that combination,
-    where an answer that sums or counts conditionally has 0.
+    where an answer that sums or counts conditionally has 0. A TREE with no ORDER keeps its
+    input's order among siblings, which the question doesn't ask for, so its children
+    column ("unordered") is compared with the siblings in any order.
     """
     label = _CLUSTER_LABEL.search(gold)
     if label and label.group(1) in result["columns"]:
@@ -290,6 +293,10 @@ def graded_as(gold: str, result: dict) -> dict:
         values = [c for c in result["columns"] if c not in per]
         if values:
             result = {**result, "pivot_values": values}
+    tree = _TREE.search(gold)
+    if tree and not re.search(r"\bORDER\b", tree.group(1), re.IGNORECASE) \
+            and tree.group(2) in result["columns"]:
+        result = {**result, "unordered": tree.group(2)}
     return result
 
 
@@ -341,11 +348,16 @@ def choose(items: list[dict], per_category: int, seed: int,
 # --------------------------------------------------------------------------- #
 
 _MIDNIGHT = re.compile(r"(\d{4}-\d{2}-\d{2})T00:00(?::00(?:\.0+)?)?(?:Z|\+00:00)?")
+_OFFSET = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?[+-]\d{2}:\d{2}")
 
 
 def _value(value, kind: str):
     if value is None:
         return None
+    if isinstance(value, str) and _OFFSET.fullmatch(value):
+        # A TIMESTAMPTZ is an instant: 10:30 at -05:00 is 15:30Z, however the answer writes it.
+        value = datetime.datetime.fromisoformat(value).astimezone(datetime.timezone.utc) \
+            .isoformat().replace("+00:00", "Z")
     if isinstance(value, str) and (midnight := _MIDNIGHT.fullmatch(value)):
         # A day's bucket, as DOWNSAMPLE or DATE_TRUNC gives it, is the day: an answer that
         # groups by the DATE 2026-10-21 has the same rows as one that groups by its midnight.
@@ -360,6 +372,43 @@ def _value(value, kind: str):
         except (decimal.InvalidOperation, ValueError, OverflowError):
             return str(value)
     return value if isinstance(value, str) else json.dumps(value, sort_keys=True)
+
+
+def _nested(text: str):
+    """A nested value as the engine prints it, `[{k: v, children: [...]}, ...]`, with every
+    list's items in one order; the text itself when it isn't one."""
+    at = 0
+
+    def item():
+        nonlocal at
+        while text[at] == " ":
+            at += 1
+        if text[at] in "[{":
+            close = "]" if text[at] == "[" else "}"
+            at += 1
+            parts = []
+            while text[at] != close:
+                if close == "}":
+                    colon = text.index(":", at)
+                    key, at = text[at:colon].strip(), colon + 1
+                    parts.append(f"{key}: {item()}")
+                else:
+                    parts.append(item())
+                while text[at] in ", ":
+                    at += 1
+            at += 1
+            return f"[{', '.join(sorted(parts))}]" if close == "]" else f"{{{', '.join(parts)}}}"
+        end = at
+        while end < len(text) and text[end] not in ",]}":
+            end += 1
+        value, at = text[at:end].strip(), end
+        return value
+
+    try:
+        whole = item()
+    except (IndexError, ValueError):
+        return text
+    return whole if at == len(text) else text
 
 
 def _columns(result: dict) -> list[list]:
@@ -384,6 +433,7 @@ def compare(gold: dict, answer: dict) -> str:
     label = gold["columns"].index(gold["partition"]) if gold.get("partition") else None
     subtotals = {gold["columns"].index(k) for k in gold.get("subtotals") or []}
     zeroed = {gold["columns"].index(k) for k in gold.get("pivot_values") or []}
+    unordered = {gold["columns"].index(gold["unordered"])} if gold.get("unordered") else set()
     if 0 < len(answer_cols) < len(gold_cols) and compare(answer, gold) == "extra_columns":
         # The gold's rows, but fewer of its columns: the counterpart of extra_columns, a
         # reading of which columns to show rather than wrong rows.
@@ -396,10 +446,14 @@ def compare(gold: dict, answer: dict) -> str:
                   for i in subtotals for j in range(len(answer_cols))}
     for i in zeroed:
         gold_cols[i] = _zeroed(gold_cols[i])
+    for i in unordered:
+        gold_cols[i] = [_nested(v) if isinstance(v, str) else v for v in gold_cols[i]]
 
     def column(i: int, j: int) -> list:
         if i in zeroed:
             return _zeroed(answer_cols[j])
+        if i in unordered:
+            return [_nested(v) if isinstance(v, str) else v for v in answer_cols[j]]
         return relabelled.get((i, j), answer_cols[j])
 
     sizes = [_group_sizes(c) for c in answer_cols]
