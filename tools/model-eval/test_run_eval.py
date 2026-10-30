@@ -271,6 +271,29 @@ class TreeSiblingsMayComeInAnyOrder(unittest.TestCase):
         self.assertNotIn("unordered", run_eval.graded_as(ordered, plain))
 
 
+ROLLUP_LEVEL = "query {\n    γ ROLLUP (floor), COUNT(*) → device_count, GROUPING(floor) → level (devices)\n};"
+
+
+class AGroupingLevelMayBeLabelledAnyWay(unittest.TestCase):
+
+    gold = run_eval.graded_as(ROLLUP_LEVEL, result(
+        ["floor", "device_count", "level"], ["NUMBER", "NUMBER", "NUMBER"],
+        [[0, 12, 0], [1, 8, 0], [None, 20, 1]]))
+
+    def test_the_gold_names_its_level_column(self):
+        self.assertEqual(self.gold["partition"], "level")
+
+    def test_labels_that_tell_the_levels_apart_match(self):
+        answer = result(["floor", "device_count", "level"], ["NUMBER", "NUMBER", "STRING"],
+                        [[0, 12, "floor"], [1, 8, "floor"], [None, 20, "grand total"]])
+        self.assertEqual(run_eval.compare(self.gold, answer), "match")
+
+    def test_one_label_for_every_level_does_not_match(self):
+        answer = result(["floor", "device_count", "level"], ["NUMBER", "NUMBER", "STRING"],
+                        [[0, 12, "row"], [1, 8, "row"], [None, 20, "row"]])
+        self.assertEqual(run_eval.compare(self.gold, answer), "mismatch")
+
+
 class TemperatureRisesForAStuckModel(unittest.TestCase):
 
     ALIAS = "script:6:29: error: Syntax error in RA expression: Relix has no table aliases: write RENAME o (orders)"
