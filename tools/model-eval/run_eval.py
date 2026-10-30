@@ -259,6 +259,7 @@ def gold_result(server: McpServer, suite: str, data: str, gold: str, by_key: boo
 _CLUSTER_LABEL = re.compile(r"\bCLUSTER\b[^;{}]*?\bAS\s+(\w+)", re.IGNORECASE)
 _GROUPING_SETS = re.compile(r"\bGROUPING\s+SETS\b", re.IGNORECASE)
 _ROLLUP = re.compile(r"\b(?:ROLLUP|CUBE)\s*\(([^()]*)\)", re.IGNORECASE)
+_GROUPING_LEVEL = re.compile(r"\bGROUPING(?:_ID)?\s*\([^()]*\)\s*(?:→|->)\s*(\w+)", re.IGNORECASE)
 _PIVOT = re.compile(r"\bPIVOT\s+\w+\s+BY\s+\w+\s+PER\s+([\w\s,]*?)\s*\(", re.IGNORECASE)
 _TREE = re.compile(r"\bTREE\b([^;{}]*?)\bAS\s+(\w+)", re.IGNORECASE)
 
@@ -267,7 +268,9 @@ def graded_as(gold: str, result: dict) -> dict:
     """A gold result, marked with what its script leaves the answer free to vary.
 
     A CLUSTER numbers its clusters 1, 2, ..., but any labels that group the same rows are
-    as right, so its label column ("partition") is compared as a partition. A GROUPING SETS
+    as right, so its label column ("partition") is compared as a partition. So is the column
+    a GROUPING names: its codes (0, 1, 3) are SQL's bit mask, and a question that asks to
+    mark each row's level is as well answered by any labels that tell the same levels apart. A GROUPING SETS
     result ("grouping_sets", its sets of columns) may be answered by one query per
     grouping, graded stacked, or by one result laid out long, graded against the gold
     unpivoted. A ROLLUP or CUBE leaves NULL in its key columns ("subtotals") on a
@@ -277,7 +280,7 @@ def graded_as(gold: str, result: dict) -> dict:
     input's order among siblings, which the question doesn't ask for, so its children
     column ("unordered") is compared with the siblings in any order.
     """
-    label = _CLUSTER_LABEL.search(gold)
+    label = _CLUSTER_LABEL.search(gold) or _GROUPING_LEVEL.search(gold)
     if label and label.group(1) in result["columns"]:
         result = {**result, "partition": label.group(1)}
     sets = _GROUPING_SETS.search(gold)
