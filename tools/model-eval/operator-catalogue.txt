@@ -1,0 +1,53 @@
+## Operators SQL lacks
+
+Many questions have a Relix operator made for them, shorter and safer than a SQL-style
+workaround. Before writing a script, check whether the task is one of these; if so, get
+its page from relix_learn (the path in brackets, with detail "brief") and use it.
+
+- A value from another row of the same group: the previous or next row, the first or last
+  in order (LAG, LEAD, FIRST_VALUE, LAST_VALUE) [operators/window-offset.md]
+- Number or rank rows within a group, ties and all (ROW_NUMBER, RANK, DENSE_RANK)
+  [operators/window-ranking.md]
+- The top N rows of each group [advanced/top.md]
+- Running totals, moving averages, cumulative sums over an ordered sequence
+  [operators/rolling.md]
+- Split each group's ordered rows into sessions where the gap exceeds a limit (gaps and
+  islands) [advanced/sessionize.md]
+- One row per time bucket (per hour, per day) [advanced/downsample.md]
+- Subtotals and a grand total (ROLLUP, CUBE, GROUPING SETS), and which level a row is
+  [aggregates/grouping.md]
+- The value from the row with the highest or lowest of something, per group
+  [aggregates/argmax.md]
+- Aggregate only the rows that meet a condition (conditional counts and sums)
+  [aggregates/filter.md]
+- Gather a group's values into a list, or into one string [aggregates/collect.md]
+  [aggregates/string_agg.md]
+- Turn row values into columns [operators/pivot.md], or columns into rows
+  [operators/unpivot.md]
+- One row per element of an array column [operators/unnest.md]
+- Every pair linked through a chain of any length: ancestors, descendants, everyone
+  under a manager, everything reachable [advanced/closure.md]
+- Routes between nodes: shortest paths, how many steps away, what is reachable within
+  N steps [advanced/path.md]
+- A hierarchy as nested documents, each item with its children in a column
+  [operators/tree.md]
+- General recursion when closure and paths don't fit [advanced/fix.md]
+- Repeat a computation until it settles: PageRank, state machines, convergence
+  [advanced/iterate.md]
+- Group rows that are linked, directly or through others, or that probably describe the
+  same thing [advanced/cluster.md] [advanced/record-linkage.md]
+- Values that satisfy a set of constraints (puzzles, assignments) [advanced/solve.md]
+- The best choice or quantities under limits: maximise or minimise an objective
+  [advanced/optimize.md]
+- The smallest set of combinations that covers every pair of values [advanced/cover.md]
+- Which input rows produced each result row (lineage, provenance) [operators/why.md]
+- Match each row to the nearest earlier row in time, such as the price in force then
+  [joins/asof-join.md]
+- Rows whose time ranges overlap or contain one another [joins/interval-join.md]
+- Keep rows that have a match [joins/semi-join.md], or that have none
+  [joins/anti-join.md]
+- Keep the rows of both sides, matched or not [joins/full-outer-join.md]
+- Rows related to all of something [set-operations/division.md]
+  [operators/forall.md]
+- Rows in one of two relations but not both [set-operations/symmetric-difference.md]
+- A random sample [advanced/sample-bernoulli.md] [advanced/sample-reservoir.md]
