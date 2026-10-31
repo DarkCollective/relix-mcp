@@ -47,6 +47,27 @@ final class Reference {
     private final List<FunctionPage> functions = functionPages();
 
     /**
+     * The path of the reference's catalogue of operators by task: each task SQL has no
+     * operator for, in a question's words, with the page of the operator that does it.
+     * relix-docs publishes it at this path (relix-core#245), and its links are the paths
+     * {@link #page(String)} reads.
+     */
+    static final String BY_TASK = "operators-by-task.md";
+
+    /**
+     * {@return the catalogue of operators by task, as the reference publishes it, when the
+     * reference has one}
+     *
+     * <p>A model that does not know an operator exists writes a workaround instead of
+     * asking for it, so the server's instructions and {@code relix_learn}'s description
+     * carry this page whole. It ships with the engine's reference, so it cannot fall behind
+     * the operators the server runs.
+     */
+    static Optional<String> operatorsByTask() {
+        return RelixDocs.referencePage(BY_TASK).map(String::strip);
+    }
+
+    /**
      * {@return every page, one line each, grouped by category, then every function}
      */
     String contents() {
@@ -86,7 +107,8 @@ final class Reference {
 
     /**
      * Finds the page a topic names: a language page by path, lookup key or title, then any
-     * page relix-docs' {@link ReferenceLookup} keys by the topic, then a function by name.
+     * page relix-docs' {@link ReferenceLookup} keys by the topic, then a function by name or
+     * by its page's path.
      *
      * @param topic a glyph, keyword, name, function name or path, in any case
      * @return the page's markdown, when one matches
@@ -103,8 +125,10 @@ final class Reference {
         if (language.isPresent()) {
             return language;
         }
+        // A function by its name, or by its page's path, which is how the reference's own
+        // pages link it: the catalogue of operators by task links functions/datetime/age.md.
         return lookup.lookup(wanted).or(() -> functions.stream()
-                .filter(f -> f.name().equalsIgnoreCase(wanted))
+                .filter(f -> f.name().equalsIgnoreCase(wanted) || f.docKey().equalsIgnoreCase(wanted))
                 .findFirst()
                 .flatMap(f -> f.library().documentation(f.docKey())));
     }

@@ -276,6 +276,46 @@ final class Tools {
     private final ScriptExplainer explainer = new ScriptExplainer();
     private final Reference reference = new Reference();
     private final DataKeys keys;
+    private final int searchPages;
+
+    /** How many of a search's pages {@code relix_learn} returns brief, unless told otherwise. */
+    static final int DEFAULT_SEARCH_PAGES = 3;
+
+    /**
+     * The environment variable that sets how many of a search's pages {@code relix_learn}
+     * returns brief, beside the list of what it found; {@code 0} returns only the list.
+     */
+    static final String SEARCH_PAGES_VARIABLE = "RELIX_MCP_LEARN_PAGES";
+
+    /**
+     * {@return how many of a search's pages {@code relix_learn} returns brief, as the
+     * environment says}
+     *
+     * <p>A model handed the pages of the first few hits uses the operator they describe; one
+     * handed only a list of hits seldom asks for a page (relix-mcp#81). The variable exists
+     * so an evaluation can measure the list alone.
+     *
+     * @param env the server's environment
+     * @throws IllegalStateException when {@value #SEARCH_PAGES_VARIABLE} is set to anything
+     *                               but a whole number from 0 to {@value Reference#SHOWN}
+     */
+    static int searchPages(Map<String, String> env) {
+        String value = env.get(SEARCH_PAGES_VARIABLE);
+        if (value == null) {
+            return DEFAULT_SEARCH_PAGES;
+        }
+        try {
+            int n = Integer.parseInt(value.strip());
+            if (n >= 0 && n <= Reference.SHOWN) {
+                return n;
+            }
+        } catch (NumberFormatException e) {
+            // reported below, as an out-of-range number is
+        }
+        throw new IllegalStateException(SEARCH_PAGES_VARIABLE + " takes a whole number from 0 to "
+                + Reference.SHOWN + ", how many of a search's pages relix_learn returns, not '"
+                + value + "'");
+    }
 
     /**
      * The tools, {@code relix_run} with the {@linkplain ScriptRunner#DEFAULT_SANDBOX default
@@ -301,10 +341,27 @@ final class Tools {
      * @param runner runs the scripts {@code relix_run} is given
      * @param keys   where {@code relix_load} keeps data, or null for a server that keeps
      *               none, and so offers neither it nor a {@code data} argument
+     * @throws IllegalStateException when the environment's {@value #SEARCH_PAGES_VARIABLE}
+     *                               is not a number of pages
      */
     Tools(ScriptRunner runner, DataKeys keys) {
+        this(runner, keys, searchPages(System.getenv()));
+    }
+
+    /**
+     * The tools, {@code relix_run} with {@code runner}'s limits, keeping loaded data in
+     * {@code keys}, and {@code relix_learn} returning {@code searchPages} of a search's
+     * pages brief.
+     *
+     * @param runner      runs the scripts {@code relix_run} is given
+     * @param keys        where {@code relix_load} keeps data, or null to keep none
+     * @param searchPages how many of the pages a search finds {@code relix_learn} returns
+     *                    brief beside the list; 0 for the list alone
+     */
+    Tools(ScriptRunner runner, DataKeys keys, int searchPages) {
         this.runner = runner;
         this.keys = keys;
+        this.searchPages = searchPages;
     }
 
     /**
@@ -460,17 +517,20 @@ final class Tools {
      * The description of {@code relix_learn}, naming the operators SQL has no word for.
      *
      * <p>A model that does not know an operator exists will not ask for it; it writes
-     * the algorithm in another language instead. So the description says what exists,
-     * from the reference's own {@code advanced} pages, their titles and summaries as the
-     * engine ships them: the list cannot fall behind the jar the server runs.
+     * the algorithm in another language instead. So the description says what exists:
+     * the reference's catalogue of operators by task ({@link Reference#operatorsByTask()}),
+     * or, from a reference without one, its own {@code advanced} pages, their titles and
+     * summaries. Either ships with the engine, so it cannot fall behind the jar the server
+     * runs.
      */
     String learnDescription() {
         StringBuilder out = new StringBuilder("""
-                Reads the Relix language reference that ships with the engine. Ask for a \
+                Reads the Relix language reference that ships with the engine. Start by \
+                describing the user's question here, in the user's own words: relix_learn \
+                searches every page for it and returns those that fit best%s. Ask for a \
                 page by name (an operator glyph like σ, a keyword like SELECT or ROLLING, a \
-                function like Round, or a page path), or describe what you want to do, in \
-                your own words, and relix_learn searches every page for it. With no topic, lists \
-                every page. The whole grammar, as EBNF, is the page '%s'.
+                function like Round, or a page path). With no topic, lists every page. The \
+                whole grammar, as EBNF, is the page '%s'.
 
                 Pages are long, and each one read stays in the conversation. With detail \
                 'brief', a page is cut to its syntax and one example; ask for the whole \
@@ -479,11 +539,20 @@ final class Tools {
                 For a reader that can fetch a URL, the site publishes a primer at %s and \
                 the grammar as plain text at %s; they describe the current release.
 
-                Relix has operators SQL lacks. Before writing anything for a task a query \
-                does not obviously express, describe the task here. Among them:
-                """.formatted(GRAMMAR_PAGE, LLMS_TXT, GRAMMAR_TXT));
-        for (ReferencePage page : reference.category("advanced")) {
-            out.append("- ").append(page.title()).append(": ").append(page.summary()).append('\n');
+                Relix has operators SQL lacks.""".formatted(searchPages == 0 ? ""
+                        : ", the first " + searchPages + " cut to their syntax and an example",
+                GRAMMAR_PAGE, LLMS_TXT, GRAMMAR_TXT));
+        Optional<String> byTask = Reference.operatorsByTask();
+        if (byTask.isPresent()) {
+            out.append(" The reference's page '").append(Reference.BY_TASK)
+                    .append("' names the one for each task; ask for a page by the path it links:\n\n")
+                    .append(byTask.get());
+        } else {
+            out.append(" Before writing anything for a task a query does not obviously ")
+                    .append("express, describe the task here. Among them:\n");
+            for (ReferencePage page : reference.category("advanced")) {
+                out.append("- ").append(page.title()).append(": ").append(page.summary()).append('\n');
+            }
         }
         return out.toString().stripTrailing();
     }
@@ -493,8 +562,9 @@ final class Tools {
                 "type", "object",
                 "properties", Map.of(
                         "topic", Map.of("type", "string",
-                                "description", "a glyph, keyword, function name or page "
-                                        + "path; omit to list every page"),
+                                "description", "what you want to do, in your own words; or "
+                                        + "a glyph, keyword, function name or page path; omit "
+                                        + "to list every page"),
                         "detail", Map.of("type", "string", "enum", List.of(FULL, BRIEF),
                                 "description", "'full' (the default) for the whole page, "
                                         + "'brief' for its syntax and one example")));
@@ -950,8 +1020,41 @@ final class Tools {
                     .append("keyword, '").append(path).append("' gives its glyph, and the ")
                     .append("glyph finds the page."));
             answer.append(" Call learn with no topic to list every page.");
+            briefPages(hits).ifPresent(pages -> answer.append("\n\n").append(pages));
             return text(answer.toString());
         });
+    }
+
+    /**
+     * The brief pages of a search's first hits, so one call gives a model the syntax and an
+     * example of the operators that fit its question, not only their names: given only the
+     * list, a model seldom asks for a page, and writes a workaround instead (relix-mcp#81).
+     *
+     * <p>The catalogue of operators by task is left out: it names a task in a question's
+     * words, so it matches most questions, and it is already in this tool's description.
+     *
+     * @param hits what the search found, most relevant first
+     * @return the brief pages of the first {@link #searchPages} hits but the catalogue, each
+     *         headed by its title and path; empty when there are none to give
+     */
+    private Optional<String> briefPages(List<Reference.Hit> hits) {
+        List<String> pages = new ArrayList<>();
+        for (Reference.Hit hit : hits) {
+            if (pages.size() == searchPages) {
+                break;
+            }
+            if (hit.where().equals(Reference.BY_TASK)) {
+                continue;
+            }
+            reference.page(hit.where()).ifPresent(page -> pages.add("=== " + hit.title()
+                    + " [" + hit.where() + "] ===\n" + Reference.brief(page)));
+        }
+        if (pages.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of("The first " + pages.size() + (pages.size() == 1 ? " page" : " pages")
+                + ", cut to the syntax and one example; their examples use other tables, so "
+                + "use one only if it fits the question:\n\n" + String.join("\n\n", pages));
     }
 
     /** A finding as the JSON object a client receives: its components, and no more. */
