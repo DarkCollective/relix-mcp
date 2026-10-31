@@ -5,6 +5,9 @@
 
 import io
 import os
+import stat
+import sys
+import tempfile
 import unittest
 
 import run_eval
@@ -545,6 +548,7 @@ class PagesAreRetrievedForTheQuestion(unittest.TestCase):
 
     SEARCH = ("No page is called 'q'.\n\nThe ordering functions; ask learn for one by its name:\nGREATEST, LEAST\n\n"
               " These pages mention it, most relevant first; ask learn for one by the name in brackets:\n\n"
+              "- Operators by task [operators-by-task.md]: The operator for each task\n"
               "- Window Offset [operators/window-offset.md]: LAG, LEAD\n  > WINDOW LAG(x) SORT t AS p (R)\n"
               "- MIN [aggregates/min.md]: Minimum value\n  > γ k, MIN(x) → m (R)\n"
               "- Sort [operators/sort.md]: Sort rows\n")
@@ -594,6 +598,68 @@ class TheCatalogueNamesItsPages(unittest.TestCase):
         self.assertTrue(lines)
         for line in lines:
             self.assertTrue(run_eval.catalogue_pages(line), line)
+
+
+class TheServersInstructionsAreGivenAsAClientGivesThem(unittest.TestCase):
+
+    # A stand-in for the launcher: answers initialize with instructions that say what
+    # RELIX_MCP_LEARN_PAGES it was started with, and tools/list with no tools.
+    FAKE = """import json, os, sys
+for line in sys.stdin:
+    message = json.loads(line)
+    if "id" not in message:
+        continue
+    result = {"tools": []} if message["method"] == "tools/list" else {
+        "serverInfo": {"name": "relix", "version": "t"},
+        "instructions": "Start with relix_learn. pages=" + os.environ.get("RELIX_MCP_LEARN_PAGES", "unset")}
+    print(json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}), flush=True)
+"""
+
+    def launcher(self):
+        directory = tempfile.mkdtemp()
+        script = os.path.join(directory, "fake_server.py")
+        with open(script, "w") as f:
+            f.write(self.FAKE)
+        launcher = os.path.join(directory, "relix-mcp")
+        with open(launcher, "w") as f:
+            f.write(f"#!/bin/sh\nexec {sys.executable} -I {script}\n")
+        os.chmod(launcher, os.stat(launcher).st_mode | stat.S_IEXEC)
+        return launcher
+
+    def test_the_instructions_from_initialize_are_kept_and_the_pages_passed_on(self):
+        launcher = self.launcher()
+        server = run_eval.McpServer(launcher)
+        listed = run_eval.McpServer(launcher, learn_pages=0)
+        try:
+            self.assertEqual(server.instructions, "Start with relix_learn. pages=unset")
+            self.assertEqual(listed.instructions, "Start with relix_learn. pages=0")
+        finally:
+            server.close()
+            listed.close()
+
+    def test_they_follow_the_system_prompt(self):
+        self.assertEqual(run_eval.with_instructions("Answer with relix_submit.\n", "Start with relix_learn."),
+                         "Answer with relix_submit.\n\nStart with relix_learn.")
+        self.assertEqual(run_eval.with_instructions("p", "  "), "p")
+
+    def test_they_are_given_by_default_and_the_servers_pages_kept(self):
+        args = run_eval.arguments(["--suites-dir", "d", "--suite", "s"])
+        self.assertTrue(args.server_instructions)
+        self.assertIsNone(args.learn_pages)
+        args = run_eval.arguments(["--suites-dir", "d", "--suite", "s", "--no-server-instructions",
+                                   "--learn-pages", "0"])
+        self.assertFalse(args.server_instructions)
+        self.assertEqual(args.learn_pages, 0)
+
+    def test_the_summary_says_whether_they_were_given_and_how_many_pages_a_search_returns(self):
+        args = type("Args", (), {"model": "m", "suite": ["s"], "data": "key"})()
+        self.assertIn("Server instructions: not given.", run_eval.summary([], args, {}))
+        self.assertIn("Brief pages a relix_learn search returns: the server default.",
+                      run_eval.summary([], args, {}))
+        args.instructions_given, args.learn_pages = 6768, 0
+        text = run_eval.summary([], args, {})
+        self.assertIn("Server instructions: given, 6768 characters, after the system prompt.", text)
+        self.assertIn("Brief pages a relix_learn search returns: 0.", text)
 
 
 if __name__ == "__main__":

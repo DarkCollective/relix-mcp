@@ -79,9 +79,11 @@ class ServerError(RuntimeError):
 class McpServer:
     """One relix-mcp process, spoken to with newline-delimited JSON-RPC."""
 
-    def __init__(self, launcher: str, now: str | None = None, max_rows: int | None = None):
+    def __init__(self, launcher: str, now: str | None = None, max_rows: int | None = None,
+                 learn_pages: int | None = None):
         env = {**os.environ, **({"RELIX_MCP_NOW": now} if now else {}),
-               **({"RELIX_MCP_MAX_OUTPUT_ROWS": str(max_rows)} if max_rows else {})}
+               **({"RELIX_MCP_MAX_OUTPUT_ROWS": str(max_rows)} if max_rows else {}),
+               **({"RELIX_MCP_LEARN_PAGES": str(learn_pages)} if learn_pages is not None else {})}
         self._proc = subprocess.Popen([launcher], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                       stderr=subprocess.DEVNULL, text=True, bufsize=1, env=env)
         self._next = 0
@@ -92,6 +94,9 @@ class McpServer:
             "protocolVersion": "2025-06-18", "capabilities": {},
             "clientInfo": {"name": "relix-model-eval", "version": "1"}})
         self.server_info = init.get("serverInfo", {})
+        # What the server tells a client it is for; a client such as Claude Code puts it in
+        # the system prompt, and so does the harness, unless --no-server-instructions.
+        self.instructions = init.get("instructions") or ""
         self._notify("notifications/initialized")
         self.tools = self._request("tools/list", {}).get("tools", [])
 
@@ -822,9 +827,17 @@ RETRIEVED = ("Reference pages relix_learn found for this question's words, most 
 _HIT = re.compile(r"^- [^\n]*?\[([^\]\s]+\.md)\]:", re.MULTILINE)
 
 
+# The reference's catalogue of operators by task (relix-core#245) matches most questions, and
+# the server's instructions carry it whole; R1-R2 ran on an engine without it. Left out, as
+# the server leaves it out of the pages a search returns.
+BY_TASK = "operators-by-task.md"
+
+
 def retrieved(server: McpServer, question: str, k: int) -> tuple[list[str], str]:
-    """The paths of the first k pages relix_learn finds for a question, and their brief pages."""
-    paths = _HIT.findall(text_of(server.call("relix_learn", {"topic": question})))[:k]
+    """The paths of the first k pages relix_learn finds for a question, the catalogue of
+    operators by task aside, and their brief pages."""
+    paths = [p for p in _HIT.findall(text_of(server.call("relix_learn", {"topic": question})))
+             if p != BY_TASK][:k]
     pages = [text_of(server.call("relix_learn", {"topic": p, "detail": "brief"})) for p in paths]
     return paths, "\n\n".join([RETRIEVED, *pages]) if pages else ""
 
@@ -837,6 +850,12 @@ _PAGE = re.compile(r"\[([^\]\s]+\.md)\]")
 def catalogue_pages(text: str) -> list[str]:
     """The relix_learn page paths a catalogue names."""
     return _PAGE.findall(text)
+
+
+def with_instructions(prompt: str, instructions: str) -> str:
+    """The system prompt as a client gives it: the harness's own, then the instructions the
+    server returned from initialize, as Claude Code appends a server's instructions."""
+    return f"{prompt.rstrip()}\n\n{instructions.strip()}" if instructions.strip() else prompt
 
 
 def described(key: str, tables: list[dict]) -> str:
@@ -1122,7 +1141,8 @@ def attempted(item: dict, data: str, prompt: str, server: McpServer, args) -> di
 # Main
 # --------------------------------------------------------------------------- #
 
-def main(argv=None) -> int:
+def arguments(argv=None) -> argparse.Namespace:
+    """The command line, read."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--suites-dir", required=True, help="relix's docs/llm")
     parser.add_argument("--suite", action="append", required=True, help="a suite under --suites-dir (repeatable)")
@@ -1172,6 +1192,14 @@ def main(argv=None) -> int:
                         help="ask relix_learn with the question's words and show the model the brief "
                              "pages of the first K hits before its first turn (default: off; "
                              "recorded per question as 'retrieved')")
+    parser.add_argument("--server-instructions", action=argparse.BooleanOptionalAction, default=True,
+                        help="append the instructions the server returns from initialize to the "
+                             "system prompt, as a client such as Claude Code does (default); "
+                             "--no-server-instructions leaves them out, as runs before relix-mcp#82 did")
+    parser.add_argument("--learn-pages", type=int, default=None, metavar="N",
+                        help="how many of a search's pages relix_learn returns brief, through the "
+                             "server's RELIX_MCP_LEARN_PAGES (default: the server's own, 3); "
+                             "0 returns the list alone, to measure the catalogue without retrieval")
     parser.add_argument("--hosted", metavar="ENV",
                         help="a hosted OpenAI-compatible --api: send the key in environment variable "
                              "ENV as a bearer token, send only the temperature (and "
@@ -1189,7 +1217,11 @@ def main(argv=None) -> int:
     parser.add_argument("--max-calls", type=int, default=25)
     parser.add_argument("--timeout", type=int, default=600, help="seconds per model request")
     parser.add_argument("--out", default=os.path.join(HERE, "runs"))
-    args = parser.parse_args(argv)
+    return parser.parse_args(argv)
+
+
+def main(argv=None) -> int:
+    args = arguments(argv)
 
     args.api_key = os.environ.get(args.hosted) if args.hosted else None
     if args.hosted and not args.api_key:
@@ -1221,7 +1253,7 @@ def main(argv=None) -> int:
 
     # The grading server returns results whole: the model's are cut at the server's 200-row
     # cap, and two cuts of the same rows may differ, so a cut result is run again here.
-    grader = McpServer(args.launcher, now, max_rows=GRADING_ROWS)
+    grader = McpServer(args.launcher, now, max_rows=GRADING_ROWS, learn_pages=args.learn_pages)
     if args.catalogue:
         with open(args.catalogue) as f:
             catalogue = f.read()
@@ -1234,6 +1266,12 @@ def main(argv=None) -> int:
             grader.close()
             return 2
         prompt = f"{prompt.rstrip()}\n\n{catalogue}"
+    args.instructions_given = len(grader.instructions) if args.server_instructions else 0
+    if args.server_instructions:
+        if not grader.instructions:
+            print("the server returned no instructions from initialize; none are given",
+                  file=sys.stderr)
+        prompt = with_instructions(prompt, grader.instructions)
     data, items, golds = {}, [], {}
     for name in args.suite:
         data[name], suite_items = load_suite(args.suites_dir, name)
@@ -1263,7 +1301,7 @@ def main(argv=None) -> int:
     print(f"{len(chosen)} questions; server {grader.server_info.get('title')}; model {args.model}; "
           f"NOW() {now or 'the real clock'}", file=sys.stderr)
 
-    servers = [McpServer(args.launcher, now) for _ in range(args.workers)]
+    servers = [McpServer(args.launcher, now, learn_pages=args.learn_pages) for _ in range(args.workers)]
     free = list(servers)
     free_lock = threading.Lock()
 
@@ -1395,6 +1433,13 @@ def retried(records: list[dict]) -> list[str]:
             + f". Right rows in {right} of them.", ""]
 
 
+def instructions_given(args) -> str:
+    """Whether the run gave the model the server's instructions, as a client does."""
+    given = getattr(args, "instructions_given", 0)
+    return (f"Server instructions: given, {given} characters, after the system prompt."
+            if given else "Server instructions: not given.")
+
+
 def summary(records: list[dict], args, server_info: dict) -> str:
     total = len(records)
     grades = collections.Counter(r["grade"] for r in records)
@@ -1405,7 +1450,10 @@ def summary(records: list[dict], args, server_info: dict) -> str:
              f"NOW(): {getattr(args, 'pinned_now', None) or 'the real clock'}.", "",
              f"Sampling: {json.dumps(sampled(args))}. "
              f"Operator catalogue: {getattr(args, 'catalogue', None) or 'none'}. "
-             f"Pages retrieved before the first turn: {getattr(args, 'retrieve', 0) or 'none'}.", "",
+             f"Pages retrieved before the first turn: {getattr(args, 'retrieve', 0) or 'none'}. "
+             f"{instructions_given(args)} "
+             f"Brief pages a relix_learn search returns: "
+             f"{'the server default' if getattr(args, 'learn_pages', None) is None else args.learn_pages}.", "",
              "| grade | count |", "|---|---|"]
     lines += [f"| {g} | {n} |" for g, n in grades.most_common()]
     passed = grades["match"]
