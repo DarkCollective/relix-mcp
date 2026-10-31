@@ -20,7 +20,7 @@ version = '1.0.0-rc1'
 
 // develop tracks the engine's snapshot. Promoting to main pins a released engine here
 // (-PrelixVersion=<release> tries one first); CI refuses a snapshot on main.
-ext.relixVersion = (findProperty('relixVersion') ?: '1.0.0-SNAPSHOT') as String
+ext.relixVersion = (findProperty('relixVersion') ?: '1.0.0-rc12') as String
 ext.relixIsSnapshot = relixVersion.endsWith('-SNAPSHOT')
 
 repositories {
