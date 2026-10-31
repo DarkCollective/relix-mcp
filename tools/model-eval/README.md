@@ -26,7 +26,10 @@ in relix-core. It is not part of the Gradle build.
   copy into every script, as before `relix_load` existed; `home-automation`'s data
   (about 31,000 tokens) is too large for that.
 - **System prompt:** `system-prompt.txt` with a data key, `system-prompt-inline.txt`
-  with `--data inline`, or `--prompt`.
+  with `--data inline`, or `--prompt`; then the instructions the server returned from
+  `initialize`, as a client such as Claude Code appends a server's instructions to its
+  system prompt. `--no-server-instructions` leaves them out, as every run before
+  relix-mcp#82 did. The summary says which, and how long they were.
 
 ## Running
 
@@ -102,7 +105,14 @@ one `relix_learn` has.
 
 `--retrieve 3` does what a client could do for the model: it asks `relix_learn` with the
 question's own words and puts the brief page (syntax and one example) of the first 3 hits in
-the first message, before the question. Each question records the pages in `retrieved`.
+the first message, before the question. Each question records the pages in `retrieved`. It
+skips `operators-by-task.md`, which matches most questions and which the server's
+instructions carry whole; the engine R1–R2 ran on had no such page.
+
+`--learn-pages N` sets how many of a search's pages `relix_learn` returns brief, beside its
+list of hits, through the server's `RELIX_MCP_LEARN_PAGES` (the server's default is 3).
+`--learn-pages 0` returns the list alone: the server's catalogue without its retrieval. The
+summary gives the setting.
 
 `--hosted ENV` runs against a hosted OpenAI-compatible `--api` instead of LM Studio: it sends
 the key in the environment variable `ENV` as a bearer token, sends only `--temperature` and
@@ -135,6 +145,36 @@ read against the text it ran with.
   `= != <> < <= > >=`, `AND`, `OR`, `NOT`, `IN {…}`, `BETWEEN`, `LIKE`, `IS NULL` and
   `IS DISTINCT FROM`. It names `A JOIN B USING (id)`, and says an aggregate works in
   `ROLLING … OVER PARTITION` as well as in `GROUP`. Runs before it: F1–F4 and R1–R2.
+- **The catalogue and retrieval in the server (relix-mcp#81).** The server's instructions
+  and `relix_learn`'s description carry the reference's page `operators-by-task.md`, and
+  tell the model to start by describing the question to `relix_learn`; a search returns
+  the brief pages of its first three hits. The harness gives the server's instructions by
+  default from the same change (relix-mcp#82). Runs before it: F1–F4 and R1–R2.
+
+### Measuring the built-in catalogue and retrieval (relix-mcp#82)
+
+F1–F4 (control) and R1–R2 (`--catalogue operator-catalogue.txt --retrieve 3`) ran on the 74
+hard coverage questions with `NOW()` 2026-10-26T12:00:00Z, temperature 0.2 and one worker,
+before either change above. The built-in version runs the same questions, the same way,
+without `--catalogue` or `--retrieve`, twice each:
+
+```bash
+./gradlew installDist
+# built-in, as shipped: the model decides whether to describe its question to relix_learn
+python3 tools/model-eval/run_eval.py --suites-dir ../relix/docs/llm <the F1-F4 questions> \
+    --now 2026-10-26T12:00:00Z --temperature 0.2 --workers 1
+# catalogue only: a search returns its list of hits, no pages
+python3 tools/model-eval/run_eval.py --suites-dir ../relix/docs/llm <the F1-F4 questions> \
+    --now 2026-10-26T12:00:00Z --temperature 0.2 --workers 1 --learn-pages 0
+```
+
+Compare each with F1–F4 and R1–R2 per question, with a permutation test as before. The two
+separate the catalogue's share from retrieval's, which R1–R2 could not. Both also run with
+the primer change above (relix-mcp#74), so a difference from F1–F4 is the two changes
+together. Once the built-in
+version reaches R1–R2, `--catalogue` and `operator-catalogue.txt` go (the server's page
+replaces the file), and `--retrieve` stays as a client-side comparison.
+
 
 ## Finishing, and asking
 
