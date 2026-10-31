@@ -34,21 +34,36 @@ import java.util.Properties;
  */
 public final class Main {
 
-    /** What the server tells a client it is for, before any tool is listed. */
+    /**
+     * What the server tells a client it is for, before any tool is listed: how to use the
+     * tools, then the reference's catalogue of operators by task.
+     *
+     * <p>A client such as Claude Code puts a server's instructions in the system prompt, so
+     * the catalogue is in front of the model before its first turn, whether or not it ever
+     * asks {@code relix_learn}. In the model eval, a catalogue there and the brief pages of
+     * a search on the question's words together raised the questions answered with the
+     * right rows from a mean of 48 to 59 of 74, in half the calls (relix-mcp#81).
+     */
     static final String INSTRUCTIONS = """
             Checks scripts in Relix, a relational-algebra query language, against engine \
             %s. Write a script against the tables and columns you were given, never ones \
-            you imagine. Before showing a Relix script to anyone, pass it to 'relix_validate', fix \
+            you imagine. Start by describing the user's question to 'relix_learn', in the \
+            user's own words: Relix has an operator for many tasks SQL needs a workaround \
+            for, and the search finds the pages that fit. Before showing a Relix script to anyone, pass it to 'relix_validate', fix \
             what it reports, and validate it again after every change: a script is ready \
             only once 'relix_validate' says Valid ('relix_run' and 'relix_submit' validate first, so a script \
             you run needs no separate call). To show what a script returns, 'relix_run' it over \
             inline tables rather than predicting the rows; to show how it would run, and the SQL it would send \
-            to a database, use 'relix_explain'. Use 'relix_learn' for the reference page of an operator, \
+            to a database, use 'relix_explain'. Use 'relix_learn' too for the reference page of an operator, \
             function or keyword you are unsure of, and learn '%s' for the whole grammar. \
             Finish by calling 'relix_submit' with the finished script, and show the user its \
             output unchanged: it holds the script and the rows the engine returned for it. \
             The same material is published at %s and %s.""".formatted(Relix.version(),
-            Tools.GRAMMAR_PAGE, Tools.LLMS_TXT, Tools.GRAMMAR_TXT);
+            Tools.GRAMMAR_PAGE, Tools.LLMS_TXT, Tools.GRAMMAR_TXT)
+            + Reference.operatorsByTask().map(page -> "\n\nThe reference's page '"
+                    + Reference.BY_TASK + "', which names the operator for each task SQL has no "
+                    + "operator for; 'relix_learn' gives a page by the path it links:\n\n" + page)
+                    .orElse("");
 
     static final String USAGE = """
             usage: relix-mcp                 serve MCP over standard input and output
@@ -80,6 +95,7 @@ public final class Main {
         ScriptRunner runner;
         try {
             keys = new DataKeys(new InMemoryDataStore(), DataKeys.maxKeys(System.getenv()));
+            Tools.searchPages(System.getenv());
             runner = new ScriptRunner(ScriptRunner.sandbox(ScriptRunner.DEFAULT_QUERY_TIMEOUT,
                     ScriptRunner.maxOutputRows(System.getenv())));
         } catch (IllegalStateException e) {

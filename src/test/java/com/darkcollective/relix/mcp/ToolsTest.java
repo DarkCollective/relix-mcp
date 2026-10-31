@@ -4,6 +4,7 @@ import com.darkcollective.relix.docs.ReferencePage;
 import com.darkcollective.relix.docs.RelixDocs;
 import com.darkcollective.relix.mcp.offline.CallerCatalog;
 import com.darkcollective.relix.mcp.offline.ScriptValidator;
+import com.darkcollective.relix.mcp.run.ScriptRunner;
 import io.modelcontextprotocol.json.McpJsonDefaults;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
@@ -21,6 +22,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ToolsTest {
 
@@ -810,9 +812,136 @@ class ToolsTest {
     @Test
     void learnsDescriptionNamesTheOperatorsSqlLacks() {
         String description = tools.learnTool().tool().description();
+        String byTask = Reference.operatorsByTask().orElseThrow();
 
-        assertThat(description).contains("- Cover: Combinatorial")
-                .contains("- Sessionize:").contains("- Closure:");
+        assertThat(description).contains(byTask).contains("[Cover](advanced/cover.md)")
+                .contains("[Sessionize](advanced/sessionize.md)")
+                .contains("[Closure](advanced/closure.md)")
+                .contains("Start by describing the user's question here, in the user's own words")
+                .contains("the first 3 cut to their syntax and an example");
+        assertThat(new Tools(new ScriptRunner(), null, 0).learnTool().tool().description())
+                .contains(byTask).doesNotContain("cut to their syntax");
+    }
+
+    /**
+     * The catalogue of operators by task, which the instructions and relix_learn's
+     * description carry whole (issue 81): a model that is not told an operator exists
+     * writes a workaround instead of asking for it.
+     */
+    @Test
+    void theInstructionsCarryTheCatalogueOfOperatorsByTask() {
+        String byTask = Reference.operatorsByTask().orElseThrow();
+
+        assertThat(byTask).startsWith("# Name: Operators by task");
+        assertThat(Main.INSTRUCTIONS).endsWith(byTask)
+                .contains("Start by describing the user's question to 'relix_learn', in the "
+                        + "user's own words");
+        assertThat(Main.INSTRUCTIONS.indexOf("Start by describing"))
+                .isLessThan(Main.INSTRUCTIONS.indexOf("relix_validate"));
+    }
+
+    /** Every example the catalogue shows, which a model reads before its first turn. */
+    @Test
+    void everyExampleInTheCatalogueOfOperatorsByTaskIsValid() {
+        String byTask = Reference.operatorsByTask().orElseThrow();
+        int from = byTask.indexOf("\n# Examples:");
+        int to = byTask.indexOf("\n# ", from + 1);
+        List<String> examples = examples(byTask.substring(from, to < 0 ? byTask.length() : to));
+        String tables = """
+                Orders := [
+                | order_id | customer_id | order_date | amount |
+                |----------|-------------|------------|--------|
+                | 1        | 1           | 2026-01-05 | 120    |
+                | 2        | 1           | 2026-02-11 | 50     |
+                ];
+                Customers := [
+                | customer_id | name |
+                |-------------|------|
+                | 1           | Ann  |
+                | 2           | Bo   |
+                ];
+                """;
+
+        assertThat(examples).hasSizeGreaterThanOrEqualTo(3);
+        for (String example : examples) {
+            assertThat(new ScriptValidator().validate(tables + "query { " + example.strip() + " };",
+                    Map.of(), CallerCatalog.empty()).render()).as(example).isEqualTo("Valid.");
+        }
+    }
+
+    @Test
+    void everyPageTheCatalogueLinksIsOneLearnServes() {
+        Matcher link = Pattern.compile("\\]\\(([^)#]+\\.md)\\)")
+                .matcher(Reference.operatorsByTask().orElseThrow());
+        List<String> paths = new ArrayList<>();
+        while (link.find()) {
+            paths.add(link.group(1));
+        }
+
+        assertThat(paths).hasSizeGreaterThan(20).contains("advanced/top.md", "functions/datetime/age.md");
+        for (String path : paths) {
+            assertThat(text(tools.learn(call("relix_learn", Map.of("topic", path, "detail", "brief")))))
+                    .as(path).startsWith("# Name:");
+        }
+    }
+
+    /**
+     * A search returns the brief pages of its first three hits, so one call gives what the
+     * model eval's --retrieve 3 gave (issue 81). The list comes first and is unchanged.
+     */
+    @Test
+    void aSearchReturnsTheBriefPagesOfItsFirstThreeHits() {
+        String request = "pairwise test combinations";
+        String answer = text(tools.learn(call("relix_learn", Map.of("topic", request))));
+        Reference.Found found = new Reference().search(request);
+
+        assertThat(firstHit(request)).isEqualTo("Cover");
+        assertThat(answer).contains("The first 3 pages, cut to the syntax and one example")
+                .contains("=== Cover [advanced/cover.md] ===\n# Name:");
+        assertThat(answer.indexOf("- Cover [advanced/cover.md]")).isLessThan(answer.indexOf("=== Cover"));
+        assertThat(Pattern.compile("^=== .* ===$", Pattern.MULTILINE).matcher(answer).results().count())
+                .isEqualTo(3);
+        for (Reference.Hit hit : found.hits().stream()
+                .filter(h -> !h.where().equals(Reference.BY_TASK)).limit(3).toList()) {
+            String brief = Reference.brief(new Reference().page(hit.where()).orElseThrow());
+            assertThat(answer).contains("=== " + hit.title() + " [" + hit.where() + "] ===\n" + brief);
+        }
+
+        String listOnly = text(new Tools(new ScriptRunner(), null, 0)
+                .learn(call("relix_learn", Map.of("topic", request))));
+        assertThat(listOnly).contains("- Cover [advanced/cover.md]").doesNotContain("===")
+                .doesNotContain("cut to the syntax");
+        assertThat(answer).startsWith(listOnly);
+    }
+
+    @Test
+    void theBriefPagesLeaveOutTheCatalogueTheDescriptionAlreadyCarries() {
+        String request = "the three biggest orders of each customer";
+        assertThat(new Reference().search(request).hits().getFirst().where()).isEqualTo(Reference.BY_TASK);
+
+        String answer = text(tools.learn(call("relix_learn", Map.of("topic", request))));
+        assertThat(answer).contains("- Operators by task [" + Reference.BY_TASK + "]")
+                .doesNotContain("=== Operators by task").contains("=== Top-K [advanced/top.md] ===");
+        assertThat(Pattern.compile("^=== .* ===$", Pattern.MULTILINE).matcher(answer).results().count())
+                .isEqualTo(3);
+    }
+
+    @Test
+    void aPageFoundByNameReturnsItselfNotASearch() {
+        assertThat(text(tools.learn(call("relix_learn", Map.of("topic", "COVER")))))
+                .startsWith("# Name:").doesNotContain("cut to the syntax and one example");
+    }
+
+    @Test
+    void theEnvironmentSetsHowManyPagesASearchReturns() {
+        assertThat(Tools.searchPages(Map.of())).isEqualTo(Tools.DEFAULT_SEARCH_PAGES).isEqualTo(3);
+        assertThat(Tools.searchPages(Map.of(Tools.SEARCH_PAGES_VARIABLE, "0"))).isZero();
+        assertThat(Tools.searchPages(Map.of(Tools.SEARCH_PAGES_VARIABLE, " 8 "))).isEqualTo(8);
+        for (String wrong : List.of("-1", "9", "three", "")) {
+            assertThatThrownBy(() -> Tools.searchPages(Map.of(Tools.SEARCH_PAGES_VARIABLE, wrong)))
+                    .as(wrong).isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining(Tools.SEARCH_PAGES_VARIABLE);
+        }
     }
 
     @Test

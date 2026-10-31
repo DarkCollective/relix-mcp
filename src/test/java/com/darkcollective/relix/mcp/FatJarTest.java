@@ -101,6 +101,9 @@ class FatJarTest {
 
         assertThat(body).contains("\"name\":\"relix\"").contains("engine")
                 .contains("\"version\":\"" + System.getProperty("relix.mcp.version") + "\"");
+        // The instructions end with the reference's catalogue of operators by task, read
+        // from the bundled pages when the server starts.
+        assertThat(body).contains("# Name: Operators by task");
     }
 
     /**
@@ -195,6 +198,11 @@ class FatJarTest {
         assertThat(call("relix_learn", "{\"topic\":\"σ\"}")).contains("Selection");
         assertThat(call("relix_learn", "{\"topic\":\"round\"}")).contains("Round");
         assertThat(call("relix_learn", "{\"topic\":\"σ\",\"detail\":\"brief\"}")).contains("# Example:");
+        // A search returns the brief pages of its first hits, a function's among them.
+        assertThat(call("relix_learn", "{\"topic\":\"pairwise test combinations\"}"))
+                .contains("=== Cover [advanced/cover.md] ===");
+        assertThat(call("relix_learn", "{\"topic\":\"functions/datetime/age.md\",\"detail\":\"brief\"}"))
+                .contains("# Name:");
     }
 
     /**
