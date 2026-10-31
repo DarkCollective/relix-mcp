@@ -124,6 +124,18 @@ Each run writes `runs/<timestamp>/`:
 - `results.jsonl`: one record per question;
 - `transcripts/`: every message, tool call and result.
 
+## Changes to what the model reads
+
+The tools' descriptions, the primer and the server's instructions are part of what a run
+measures, so a change to them moves the baseline. Each is listed here, so a result can be
+read against the text it ran with.
+
+- **Primer predicates, USING and ROLLING (relix-mcp#74).** The primer no longer says `<>`
+  is not an operator (the engine has taken it since rc10); its predicates are
+  `= != <> < <= > >=`, `AND`, `OR`, `NOT`, `IN {…}`, `BETWEEN`, `LIKE`, `IS NULL` and
+  `IS DISTINCT FROM`. It names `A JOIN B USING (id)`, and says an aggregate works in
+  `ROLLING … OVER PARTITION` as well as in `GROUP`. Runs before it: F1–F4 and R1–R2.
+
 ## Finishing, and asking
 
 A question ends with `relix_submit`. A model that stops without it, writing its answer
