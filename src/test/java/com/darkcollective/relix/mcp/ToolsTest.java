@@ -152,6 +152,51 @@ class ToolsTest {
         }
     }
 
+    /**
+     * The primer's predicates, USING join and ROLLING total, held to the engine (issue 74:
+     * the primer said {@code <>} was not an operator a release after the engine took it).
+     * Each form the primer writes validates, and the ROLLING total sits beside every row.
+     */
+    @Test
+    void thePrimersPredicatesUsingJoinAndRollingTotalAreWhatTheEngineTakes() {
+        String table = """
+                R := [
+                | id | k | x | a | b |
+                |----|---|---|---|---|
+                | 1  | p | 1 | 4 | 4 |
+                | 2  | p | 2 | 3 | 1 |
+                | 3  | q | 5 | 1 | 2 |
+                ];
+                S := [
+                | id | k | y |
+                |----|---|---|
+                | 1  | q | 7 |
+                ];
+                """;
+        List<String> predicates = List.of("x = 1", "x != 1", "x <> 1", "x < 1", "x <= 1",
+                "x > 1", "x >= 1", "x > 1 AND NOT x = 2 OR x = 3", "x IN {1, 2}",
+                "x BETWEEN 1 AND 9", "k LIKE 'A%'", "x IS NULL", "a IS DISTINCT FROM b");
+        assertThat(Tools.PRIMER).contains("Predicates: = != <> < <= > >=, AND, OR, NOT, x IN {1, 2}, "
+                        + "x BETWEEN 1 AND 9, x LIKE 'A%', x IS NULL, a IS DISTINCT FROM b.")
+                .doesNotContain("is not an operator");
+        for (String predicate : predicates) {
+            assertThat(new ScriptValidator().validate(table + "query { SELECT " + predicate + " (R) };",
+                    Map.of(), CallerCatalog.empty()).render()).as(predicate).isEqualTo("Valid.");
+        }
+
+        String using = "A JOIN B USING (id)";
+        String rolling = "ROLLING SUM(x) OVER PARTITION PER k AS total (R)";
+        assertThat(Tools.PRIMER).contains(using).contains(rolling).contains("and ROLLING, which keeps every row");
+        String usingRan = text(tools.run(call("relix_run", Map.of("script",
+                table + "query { " + using.replace("A", "R").replace("B", "S") + " };"))));
+        assertThat(usingRan).contains("| 1 | p | 1 | 4 | 4 | q | 7 |").contains("(1 row");
+
+        String rollingRan = text(tools.run(call("relix_run", Map.of("script",
+                table + "query { SORT id (PROJECT id, total (" + rolling + ")) };"))));
+        assertThat(rollingRan).contains("| 1 | 3 |").contains("| 2 | 3 |").contains("| 3 | 5 |")
+                .contains("(3 rows");
+    }
+
     @Test
     void theToolsAreNamedAfterTheLanguage() {
         assertThat(tools.all()).extracting(t -> t.tool().name())
