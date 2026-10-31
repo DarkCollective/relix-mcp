@@ -16,7 +16,7 @@ plugins {
 }
 
 group = 'com.darkcollective.relix'
-version = '1.0.0-rc1'
+version = '1.0.0-rc2'
 
 // develop tracks the engine's snapshot. Promoting to main pins a released engine here
 // (-PrelixVersion=<release> tries one first); CI refuses a snapshot on main.
