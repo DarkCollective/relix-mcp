@@ -115,10 +115,13 @@ final class Tools {
             SELECT cond (R) σ keeps the rows where cond holds. It is a filter, not SQL's SELECT.
             PROJECT a, b * 2 -> c (R) π chooses and computes columns: this is SQL's SELECT list.
             GROUP k, SUM(x) -> total, COUNT(*) -> n (R) γ aggregates. SUM, COUNT, AVG, MIN and \
-            MAX work only inside GROUP; with no k, GROUP SUM(x) -> total (R) gives one row for \
-            the whole relation.
+            MAX work only inside GROUP, which gives one row per group, and ROLLING, which keeps \
+            every row; with no k, GROUP SUM(x) -> total (R) gives one row for the whole relation. \
+            ROLLING SUM(x) OVER PARTITION PER k AS total (R) puts each k's total beside each of \
+            its rows.
             SORT x DESC (R) τ; LIMIT n (R) λ; RENAME (old -> new) (R) ρ; DISTINCT (R) δ; \
-            A JOIN B ⋈ joins on every shared column name; A >< A.id = B.a_id B joins on a \
+            A JOIN B ⋈ joins on every shared column name, and A JOIN B USING (id) on the named \
+            ones only; A >< A.id = B.a_id B joins on a \
             condition written between the inputs, and no JOIN goes in front of it; LJOIN, RJOIN, FJOIN (outer) and SEMI, ANTI \
             (keep rows with, or without, a match) take a condition the same way: \
             Customers ANTI Customers.id = Orders.customer_id Orders. UNION, EXCEPT, INTERSECT.
@@ -126,8 +129,9 @@ final class Tools {
             every row tied with the 2nd: as in a race, two tied for first fill both places and \
             nobody is 2nd. Without WITH TIES a tie is cut; t DESC keeps the largest. For the top \
             N per group use TOP, not MIN, GROUP or ranks worked out by hand.
-            Predicates: = != < <= > >=, AND, OR, NOT, x IN {1, 2}, x LIKE 'A%', x IS NULL. \
-            Sets take braces, not parentheses. <> is not an operator. Comments are -- to end of line.
+            Predicates: = != <> < <= > >=, AND, OR, NOT, x IN {1, 2}, x BETWEEN 1 AND 9, \
+            x LIKE 'A%', x IS NULL, a IS DISTINCT FROM b. Sets take braces, not parentheses. \
+            Comments are -- to end of line.
             Relix also has operators SQL lacks, each with its own page: graph reachability \
             and paths (CLOSURE, PATH, TRACE), recursion (FIX), iteration to convergence \
             (ITERATE), optimisation and constraint solving (OPTIMIZE, SOLVE), pairwise test \
