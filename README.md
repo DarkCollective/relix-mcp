@@ -15,9 +15,25 @@ validate again.
 | `relix_explain(script, files?, catalog?, data?)` | Shows how the engine would run a script: each rewrite the optimiser applies, the rewritten query, and the physical plan. For a database connection, that includes the exact SQL that would be sent, in the connection's dialect. Like `relix_validate`, it contacts nothing. |
 | `relix_run(script, data?)` | Runs a script whose data is its own (inline tables, views, generators) and returns each query's rows. A model can show real results instead of predicted ones. Each column heading carries its type (`ts STRING`), and each result says whether its order is guaranteed (`sorted by spend DESC`, or `in no guaranteed order`), from the order the physical plan delivers. It validates first, so it needs no `relix_validate` call before it. Files, databases, HTTP sources, connections and imports are refused. `query { relix.columns };` shows the columns and types the engine gave the script's own tables. |
 | `relix_submit(script, data?)` | The model's final answer: runs the script as `relix_run` does and returns the script and its rows together, in a fixed form the model is told to show unchanged. The rows shown are then the engine's, for exactly that script, and a client or an eval can read the answer from the tool call (`structuredContent` has `submitted`, `script` and `results`) whatever the model writes afterwards. |
-| `relix_learn(topic?, detail?)` | The language reference that ships inside the engine: the page for an operator (`σ`, `select`), a statement, or a function (`Round`). With no topic, a list of every page. The whole grammar, as EBNF, is `relix_learn("language/grammar.md")`. With `detail: "brief"`, a page is cut to its syntax and one example, so a conversation does not carry whole pages on every later turn. |
+| `relix_learn(topic?, detail?)` | The language reference that ships inside the engine: the page for an operator (`σ`, `select`), a statement, or a function (`Round`). With no topic, a list of every page. The whole grammar, as EBNF, is `relix_learn("language/grammar.md")`. With `detail: "brief"`, a page is cut to its syntax and one example, so a conversation does not carry whole pages on every later turn. Given a description instead (`"the three biggest orders of each customer"`), it searches every page and returns the best matches, with the brief pages of the first three. See [Operators by task](#operators-by-task). |
 | `relix_load(tables?, key?, read_only?)` | Loads inline tables once and returns a data key, with each table's columns, types and row count. Pass the key as `data` to the four script tools, and their scripts hold only the query. See [Loaded data](#loaded-data). |
 | `relix_unload(key)` | Releases a data key before it expires. |
+
+### Operators by task
+
+A model that does not know an operator exists writes a workaround instead of asking for
+one: a self-join for the top rows of each group, a recursive query for reachability. So
+the server tells it up front. Its instructions, which a client such as Claude Code puts
+in the system prompt, and `relix_learn`'s description both carry the reference's page
+`operators-by-task.md` whole: each task SQL has no operator for, in a question's words,
+with the path of the page of the operator that does it. The page ships with the engine's
+reference, so it lists exactly the operators the server runs.
+
+Both also tell the model to start by describing the user's question to `relix_learn`, in
+the user's own words. A search returns the list of what it found and, after it, the brief
+pages (syntax and one example) of the first three hits, so one call gives the model the
+operator's form rather than only its name. `RELIX_MCP_LEARN_PAGES` sets how many (0 to 8;
+`0` returns the list alone, as an evaluation measuring the catalogue alone does).
 
 ### What `relix_validate` and `relix_explain` need from the caller
 
