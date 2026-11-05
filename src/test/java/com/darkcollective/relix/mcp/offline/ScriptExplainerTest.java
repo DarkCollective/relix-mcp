@@ -59,7 +59,8 @@ class ScriptExplainerTest {
                 .contains("PushedScan")
                 .contains("SELECT \"customers\".\"city\", SUM(\"orders\".\"amount\")")
                 .contains("GROUP BY")
-                .contains("NULLS LAST");
+                // NULL sorts last on rc12 and largest, so first under DESC, on rc13.
+                .containsPattern("NULLS (LAST|FIRST)");
     }
 
     @Test
