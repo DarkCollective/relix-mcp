@@ -17,6 +17,7 @@ import java.sql.Driver;
 import java.sql.DriverManager;
 import java.sql.DriverPropertyInfo;
 import java.sql.SQLException;
+import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -245,6 +246,65 @@ class NothingIsOpenedTest {
                 """.formatted(slashed(dir));
 
         assertNothingRead(everyAnswer(script, Map.of()), dir);
+    }
+
+    /**
+     * Every form of file the engine accepts that this server lets through, with a named
+     * pipe in the file's place: opening a pipe nobody writes to blocks the reader for ever,
+     * so a read shows as a timeout where a plain file would only show as content.
+     */
+    @Test
+    void noAllowedFormOpensItsFile(@TempDir Path dir) throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                !System.getProperty("os.name").toLowerCase().contains("win"));
+        for (String name : List.of("a.csv", "a.json", "a.ndjson", "a.log", "a.ged", "a")) {
+            assertThat(new ProcessBuilder("mkfifo", dir.resolve(name).toString()).start()
+                    .waitFor()).isZero();
+        }
+        String d = slashed(dir);
+        Map<String, String> forms = new java.util.LinkedHashMap<>();
+        forms.put("json", "source J from json(\"" + d + "/a.json\"); query { PROJECT zz (J) };");
+        forms.put("json records", "source J from json(\"" + d + "/a.json\") "
+                + "{ records: \"$.x\" }; query { PROJECT zz (J) };");
+        forms.put("http file url", "source H from http { url: \"file://" + d + "/a.json\" }; "
+                + "query { PROJECT zz (H) };");
+        forms.put("csv with schema", "source C from csv(\"" + d + "/a.csv\") "
+                + "{ header: true, schema: { x: NUMBER } }; query { PROJECT x (C) };");
+        forms.put("generator", "source G from generator { name: \"Range\", lo: \"1\", hi: \"3\" }; "
+                + "query { PROJECT zz (G) };");
+        for (String type : List.of("csv", "json", "ndjson")) {
+            forms.put(type + " connection", "connection c from " + type + " { path: \"" + d
+                    + "\" };\nquery { PROJECT zz (c.a) };\nquery { relix.columns };");
+        }
+        forms.put("csv connection url", "connection c from csv { url: \"file://" + d
+                + "/a.csv\" };\nquery { PROJECT zz (c.a) };");
+        forms.put("log connection", "connection c from log { path: \"" + d + "\" };\n"
+                + "source L from c { table: \"a.log\", schema: { host: STRING } };\n"
+                + "query { PROJECT host (L) };\nquery { c.a };");
+        forms.put("gedcom connection", "connection g from gedcom { path: \"" + d + "/a.ged\" };\n"
+                + "source I from g { table: \"individuals\" };\nquery { g.individuals };\n"
+                + "query { relix.relations };");
+        forms.put("csv connection source", "connection c from csv { path: \"" + d + "\" };\n"
+                + "source A from c { table: \"a\", schema: { x: NUMBER } };\n"
+                + "query { PROJECT x (A) };");
+
+        var pool = java.util.concurrent.Executors.newCachedThreadPool(r -> {
+            Thread t = new Thread(r);
+            t.setDaemon(true);
+            return t;
+        });
+        for (var form : forms.entrySet()) {
+            String script = form.getValue();
+            for (var call : List.<java.util.concurrent.Callable<String>>of(
+                    () -> validator.validate(script, Map.of(), CallerCatalog.empty()).render(),
+                    () -> explainer.explain(script, Map.of(), CallerCatalog.empty()).render(),
+                    // the same source, declared in an imported file and used from the script
+                    () -> validator.validate("import \"lib.relix\";\nquery { relix.relations };",
+                            Map.of("lib.relix", script), CallerCatalog.empty()).render())) {
+                String answer = pool.submit(call).get(5, java.util.concurrent.TimeUnit.SECONDS);
+                assertThat(answer).as(form.getKey()).doesNotContain(dir.toString());
+            }
+        }
     }
 
     /** A JDBC driver for {@code jdbc:counting:} URLs that counts connection attempts. */
