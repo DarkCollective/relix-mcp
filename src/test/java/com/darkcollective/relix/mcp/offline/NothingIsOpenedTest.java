@@ -153,6 +153,100 @@ class NothingIsOpenedTest {
         assertThat(report.valid()).isFalse();
     }
 
+    private static final String SENTINEL = "sentinel_first_line_7f3a";
+
+    private String everyAnswer(String script, Map<String, String> files) {
+        String validated = validator.validate(script, files, CallerCatalog.empty()).render();
+        String explained = explainer.explain(script, files, CallerCatalog.empty()).render();
+        String ran = new com.darkcollective.relix.mcp.run.ScriptRunner().run(script).render();
+        return validated + "\n" + explained + "\n" + ran;
+    }
+
+    private static String slashed(Path path) {
+        return path.toString().replace("\\", "/");
+    }
+
+    private void assertNothingRead(String answers, Path dir) {
+        assertThat(answers).doesNotContain(SENTINEL).doesNotContain(dir.toString());
+    }
+
+    @Test
+    void aSchemalessCsvIsNotReadAndTheModelIsToldToDeclareASchema(@TempDir Path dir)
+            throws IOException {
+        Path file = dir.resolve("c.csv");
+        Files.writeString(file, SENTINEL + ",b\n1,2\n");
+        String script = "source C from csv(\"%s\") { header: true }; query { PROJECT a (C) };"
+                .formatted(slashed(file));
+
+        assertThat(validator.validate(script, Map.of(), CallerCatalog.empty()).render())
+                .contains("declare").contains("schema");
+        assertThat(explainer.explain(script, Map.of(), CallerCatalog.empty()).render())
+                .contains("declare").contains("schema");
+        assertNothingRead(everyAnswer(script, Map.of()), dir);
+    }
+
+    @Test
+    void aMissingRelativeCsvDoesNotLeakTheWorkingDirectory() {
+        String script = "source C from csv(\"nowhere.csv\") { header: true }; "
+                + "query { PROJECT a (C) };";
+
+        String answers = everyAnswer(script, Map.of());
+
+        assertThat(answers).doesNotContain(Path.of("").toAbsolutePath().toString());
+        assertThat(validator.validate(script, Map.of(), CallerCatalog.empty()).valid()).isFalse();
+    }
+
+    @Test
+    void aCsvWithADeclaredSchemaIsStillNotRead(@TempDir Path dir) throws IOException {
+        Path file = dir.resolve("c.csv");
+        Files.writeString(file, SENTINEL + ",b\n1,2\n");
+        String script = "source C from csv(\"%s\") { header: true, schema: { a: NUMBER } }; "
+                .formatted(slashed(file)) + "query { PROJECT a (C) };";
+
+        ValidationReport report = validator.validate(script, Map.of(), CallerCatalog.empty());
+
+        assertThat(report.valid()).as(report.render()).isTrue();
+        assertThat(explainer.explain(script, Map.of(), CallerCatalog.empty()).render())
+                .doesNotContain(SENTINEL);
+    }
+
+    @Test
+    void aJsonFileIsNotRead(@TempDir Path dir) throws IOException {
+        Path file = dir.resolve("d.json");
+        Files.writeString(file, "[{\"" + SENTINEL + "\": 1}]");
+        String script = "source J from json(\"%s\"); query { PROJECT a (J) };"
+                .formatted(slashed(file));
+
+        assertNothingRead(everyAnswer(script, Map.of()), dir);
+    }
+
+    @Test
+    void aSchemalessCsvInAnImportedFileIsRefused(@TempDir Path dir) throws IOException {
+        Path file = dir.resolve("c.csv");
+        Files.writeString(file, SENTINEL + ",b\n1,2\n");
+        Map<String, String> files = Map.of("lib.relix",
+                "source C from csv(\"%s\") { header: true };".formatted(slashed(file)));
+        String script = "import \"lib.relix\"; query { PROJECT a (C) };";
+
+        ValidationReport report = validator.validate(script, files, CallerCatalog.empty());
+
+        assertThat(report.valid()).isFalse();
+        assertThat(report.render()).contains("declare").contains("lib.relix");
+        assertNothingRead(everyAnswer(script, files), dir);
+    }
+
+    @Test
+    void aFileConnectionTableIsNotRead(@TempDir Path dir) throws IOException {
+        Files.writeString(dir.resolve("people.csv"), SENTINEL + ",b\n1,2\n");
+        String script = """
+                connection disk from csv { path: "%s" };
+                source P from disk { table: "people" };
+                query { PROJECT a (P) };
+                """.formatted(slashed(dir));
+
+        assertNothingRead(everyAnswer(script, Map.of()), dir);
+    }
+
     /** A JDBC driver for {@code jdbc:counting:} URLs that counts connection attempts. */
     private record CountingDriver(AtomicInteger connects) implements Driver {
 
