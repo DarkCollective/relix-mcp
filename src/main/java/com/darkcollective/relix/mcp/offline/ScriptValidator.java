@@ -75,6 +75,13 @@ public final class ScriptValidator {
         if (!findings.isEmpty()) {
             return new ValidationReport(false, findings);
         }
+        // Before any session exists: the engine reads a schemaless file source's header
+        // while it analyses, and no switch on the builder forbids that.
+        findings.addAll(LocalFiles.refusals(script, null));
+        imports.files().forEach((path, text) -> findings.addAll(LocalFiles.refusals(text, path)));
+        if (!findings.isEmpty()) {
+            return new ValidationReport(false, findings);
+        }
         LoadedData.Prepared prepared = data.prepare(script);
         findings.addAll(prepared.ignored());
         try (Relix relix = OfflineSession.open(imports, catalog)) {
