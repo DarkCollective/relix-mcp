@@ -16,11 +16,11 @@ plugins {
 }
 
 group = 'com.darkcollective.relix'
-version = '1.0.0-rc3'
+version = '1.0.0-rc4'
 
 // develop tracks the engine's snapshot. Promoting to main pins a released engine here
 // (-PrelixVersion=<release> tries one first); CI refuses a snapshot on main.
-ext.relixVersion = (findProperty('relixVersion') ?: '1.0.0-rc12') as String
+ext.relixVersion = (findProperty('relixVersion') ?: '1.0.0-rc13') as String
 ext.relixIsSnapshot = relixVersion.endsWith('-SNAPSHOT')
 
 repositories {
